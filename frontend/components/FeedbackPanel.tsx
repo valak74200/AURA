@@ -25,7 +25,11 @@ export default function FeedbackPanel({
     .slice(-maxItems)
 
   const handleDismiss = (id: string) => {
-    setDismissedItems(prev => new Set([...prev, id]))
+    setDismissedItems(prev => {
+      const newSet = new Set(prev)
+      newSet.add(id)
+      return newSet
+    })
     onDismiss?.(id)
   }
 

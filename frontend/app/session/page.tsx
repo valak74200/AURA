@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'react-hot-toast'
-import useWebSocket from 'react-use-websocket'
+import useWebSocket, { ReadyState } from 'react-use-websocket'
 
 interface VoiceMetrics {
   pace_wpm: number
@@ -54,7 +54,7 @@ export default function SessionPage() {
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
 
   // WebSocket connection
-  const { sendMessage, lastMessage, connectionStatus } = useWebSocket(
+  const { sendMessage, lastMessage, readyState } = useWebSocket(
     `ws://localhost:8000/ws/session/${sessionId}`,
     {
       shouldReconnect: () => true,
@@ -281,9 +281,9 @@ export default function SessionPage() {
               <span className="font-mono text-lg">{formatTime(sessionTime)}</span>
             </div>
             <div className={`px-3 py-1 rounded-full text-sm font-medium ${
-              connectionStatus === 'Open' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+              readyState === ReadyState.OPEN ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
             }`}>
-              {connectionStatus === 'Open' ? 'Connecté' : 'Déconnecté'}
+              {readyState === ReadyState.OPEN ? 'Connecté' : 'Déconnecté'}
             </div>
           </div>
         </div>
@@ -397,7 +397,7 @@ export default function SessionPage() {
                 <div className={`text-3xl font-bold ${getMetricColor(currentMetrics.volume_consistency, 'consistency')}`}>
                   {Math.round(currentMetrics.volume_consistency * 100)}%
                 </div>
-                <div className="text-xs text-gray-500 mt-1">Idéal: >70%</div>
+                <div className="text-xs text-gray-500 mt-1">Idéal: {'>'}70%</div>
               </div>
 
               <div className="text-center">
@@ -405,7 +405,7 @@ export default function SessionPage() {
                 <div className={`text-3xl font-bold ${getMetricColor(currentMetrics.clarity_score, 'clarity')}`}>
                   {Math.round(currentMetrics.clarity_score * 100)}%
                 </div>
-                <div className="text-xs text-gray-500 mt-1">Idéal: >70%</div>
+                <div className="text-xs text-gray-500 mt-1">Idéal: {'>'}70%</div>
               </div>
 
               <div className="text-center">

@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion'
 import { LucideIcon } from 'lucide-react'
-import { getMetricStatus } from '@/lib/utils'
+import { getMetricStatus, getMetricColors } from '@/lib/utils'
 
 interface MetricsCardProps {
   title: string
@@ -24,7 +24,8 @@ export default function MetricsCard({
   className = ''
 }: MetricsCardProps) {
   const displayValue = type === 'pace' ? Math.round(value) : Math.round(value * 100)
-  const status = getMetricStatus(type === 'pace' ? value : value, type)
+  const metricStatus = getMetricStatus(type === 'pace' ? value : value, type)
+  const colors = getMetricColors(metricStatus)
 
   return (
     <motion.div
@@ -34,27 +35,17 @@ export default function MetricsCard({
       className={`card ${className}`}
     >
       <div className="flex items-center justify-between mb-4">
-        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-          status.status === 'excellent' ? 'bg-green-500/20' :
-          status.status === 'good' ? 'bg-yellow-500/20' :
-          status.status === 'fair' ? 'bg-orange-500/20' :
-          'bg-red-500/20'
-        }`}>
-          <Icon className={`w-5 h-5 ${status.color}`} />
+        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${colors.bg}`}>
+          <Icon className={`w-5 h-5 ${colors.text}`} />
         </div>
-        <div className={`text-xs px-2 py-1 rounded-full ${
-          status.status === 'excellent' ? 'bg-green-500/20 text-green-400' :
-          status.status === 'good' ? 'bg-yellow-500/20 text-yellow-400' :
-          status.status === 'fair' ? 'bg-orange-500/20 text-orange-400' :
-          'bg-red-500/20 text-red-400'
-        }`}>
-          {status.message}
+        <div className={`text-xs px-2 py-1 rounded-full ${colors.bg} ${colors.text}`}>
+          {metricStatus}
         </div>
       </div>
 
       <div className="text-center">
         <div className="text-sm text-gray-400 mb-2">{title}</div>
-        <div className={`text-3xl font-bold mb-1 ${status.color}`}>
+        <div className={`text-3xl font-bold mb-1 ${colors.text}`}>
           {displayValue}{type === 'pace' ? '' : unit}
         </div>
         {target && (
@@ -76,9 +67,9 @@ export default function MetricsCard({
             }}
             transition={{ duration: 0.5, ease: 'easeOut' }}
             className={`h-2 rounded-full ${
-              status.status === 'excellent' ? 'bg-green-500' :
-              status.status === 'good' ? 'bg-yellow-500' :
-              status.status === 'fair' ? 'bg-orange-500' :
+              metricStatus === 'excellent' ? 'bg-green-500' :
+              metricStatus === 'good' ? 'bg-blue-500' :
+              metricStatus === 'average' ? 'bg-yellow-500' :
               'bg-red-500'
             }`}
           />
