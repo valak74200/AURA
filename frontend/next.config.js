@@ -13,6 +13,8 @@ const nextConfig = {
   },
   // Use Babel instead of SWC
   transpilePackages: [],
+  // Use Babel instead of SWC
+  transpilePackages: [],
 }
 
 module.exports = nextConfig
