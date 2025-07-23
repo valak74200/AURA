@@ -25,6 +25,8 @@ from utils.exceptions import (
     AIModelUnavailableError,
     AIModelQuotaExceededError
 )
+from models.session import SupportedLanguage
+from utils.language_config import get_coaching_config, get_ui_message, get_feedback_template
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -84,22 +86,24 @@ class GeminiService:
         self,
         voice_metrics: Dict[str, Any],
         transcript: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        language: SupportedLanguage = SupportedLanguage.FRENCH
     ) -> List[Dict[str, Any]]:
         """
-        Generate presentation feedback using Gemini.
+        Generate presentation feedback using Gemini with cultural adaptation.
         
         Args:
             voice_metrics: Voice analysis metrics
             transcript: Optional speech transcript
             context: Additional context about the presentation
+            language: Target language for culturally appropriate feedback
             
         Returns:
-            List of feedback items
+            List of feedback items adapted to the language and culture
         """
         try:
-            # Build comprehensive prompt
-            prompt = self._build_feedback_prompt(voice_metrics, transcript, context)
+            # Build culturally adapted prompt
+            prompt = self._build_feedback_prompt(voice_metrics, transcript, context, language)
             
             # Generate feedback
             response = await asyncio.to_thread(
@@ -367,11 +371,102 @@ class GeminiService:
         self,
         voice_metrics: Dict[str, Any],
         transcript: Optional[str],
-        context: Optional[Dict[str, Any]]
+        context: Optional[Dict[str, Any]],
+        language: SupportedLanguage = SupportedLanguage.FRENCH
     ) -> str:
-        """Build comprehensive feedback prompt."""
+        """Build comprehensive feedback prompt with cultural adaptation."""
+        
+        # Get language-specific coaching configuration
+        coaching_config = get_coaching_config(language)
+        
+        # Build culturally adapted prompts
+        if language == SupportedLanguage.FRENCH:
+            prompt_parts = self._build_french_prompt(voice_metrics, transcript, context, coaching_config)
+        elif language == SupportedLanguage.ENGLISH:
+            prompt_parts = self._build_english_prompt(voice_metrics, transcript, context, coaching_config)
+        else:
+            # Fallback to French
+            prompt_parts = self._build_french_prompt(voice_metrics, transcript, context, coaching_config)
+        
+        return "\n".join(prompt_parts)
+    
+    def _build_french_prompt(
+        self,
+        voice_metrics: Dict[str, Any],
+        transcript: Optional[str],
+        context: Optional[Dict[str, Any]],
+        coaching_config
+    ) -> List[str]:
+        """Build French-specific coaching prompt."""
         prompt_parts = [
-            "As an expert presentation coach, analyze the following data and provide specific, actionable feedback:",
+            "En tant qu'expert en coaching de présentation française, analysez les données suivantes et fournissez un feedback spécifique et actionnable :",
+            "",
+            "Contexte culturel français :",
+            "- Privilégiez la structure logique et cartésienne",
+            "- Valorisez l'élégance verbale et la précision linguistique",
+            "- Respectez les conventions de politesse françaises",
+            "- Encouragez la nuance et l'évitement du trop direct",
+            "",
+            "Métriques vocales :",
+            json.dumps(voice_metrics, indent=2)
+        ]
+        
+        if transcript:
+            prompt_parts.extend([
+                "",
+                "Transcription du discours (extrait) :",
+                transcript[:1000] + "..." if len(transcript) > 1000 else transcript
+            ])
+        
+        if context:
+            prompt_parts.extend([
+                "",
+                "Contexte de présentation :",
+                json.dumps(context, indent=2)
+            ])
+        
+        prompt_parts.extend([
+            "",
+            "Fournissez 3-5 éléments de feedback spécifiques en vous concentrant sur :",
+            "1. Les problèmes les plus critiques affectant la qualité de présentation",
+            "2. Les améliorations rapides qui peuvent être implémentées immédiatement",
+            "3. Les domaines de développement à long terme",
+            "",
+            "Style de feedback français :",
+            "- Utilisez un ton constructif et respectueux",
+            "- Privilégiez les suggestions nuancées plutôt que les critiques directes",
+            "- Référez-vous aux standards de l'art oratoire français",
+            "- Encouragez l'amélioration avec élégance",
+            "",
+            "Formatez chaque élément de feedback en JSON avec :",
+            "- type: catégorie du feedback (rythme/volume/clarté/structure/engagement)",
+            "- severity: niveau d'importance (info/warning/critical)",
+            "- message: description brève en français (max 100 caractères)",
+            "- suggestion: conseil actionnable spécifique en français (max 200 caractères)",
+            "- confidence: votre confiance dans ce feedback (0.0-1.0)",
+            "- reasoning: explication brève de pourquoi c'est important",
+            "",
+            "Retournez uniquement un tableau JSON d'éléments de feedback en français."
+        ])
+        
+        return prompt_parts
+    
+    def _build_english_prompt(
+        self,
+        voice_metrics: Dict[str, Any],
+        transcript: Optional[str],
+        context: Optional[Dict[str, Any]],
+        coaching_config
+    ) -> List[str]:
+        """Build English-specific coaching prompt."""
+        prompt_parts = [
+            "As an expert in English presentation coaching, analyze the following data and provide specific, actionable feedback:",
+            "",
+            "English/Anglo-Saxon cultural context:",
+            "- Focus on audience engagement and storytelling",
+            "- Emphasize confidence building and authentic connection",
+            "- Value directness and results-oriented communication",
+            "- Encourage dynamic delivery and call-to-action",
             "",
             "Voice Metrics:",
             json.dumps(voice_metrics, indent=2)
@@ -394,22 +489,28 @@ class GeminiService:
         prompt_parts.extend([
             "",
             "Provide 3-5 specific feedback items focusing on:",
-            "1. Most critical issues affecting presentation quality",
-            "2. Quick improvements that can be implemented immediately",
-            "3. Long-term development areas",
+            "1. Most critical issues affecting audience engagement",
+            "2. Quick wins for immediate impact improvement",
+            "3. Strategic development areas for long-term growth",
+            "",
+            "English coaching style:",
+            "- Use direct, positive, and motivational language",
+            "- Provide actionable suggestions with immediate benefits",
+            "- Reference great English-speaking presenters when relevant",
+            "- Encourage confidence and authentic self-expression",
             "",
             "Format each feedback item as JSON with:",
-            "- type: category of feedback (pace/volume/clarity/structure/engagement)",
+            "- type: category of feedback (pace/volume/clarity/engagement/storytelling)",
             "- severity: importance level (info/warning/critical)",
-            "- message: brief description (max 100 characters)",
-            "- suggestion: specific actionable advice (max 200 characters)",
+            "- message: brief description in English (max 100 characters)",
+            "- suggestion: specific actionable advice in English (max 200 characters)",
             "- confidence: your confidence in this feedback (0.0-1.0)",
-            "- reasoning: brief explanation of why this matters",
+            "- reasoning: brief explanation of why this matters for English presentations",
             "",
-            "Return only a JSON array of feedback items."
+            "Return only a JSON array of feedback items in English."
         ])
         
-        return "\n".join(prompt_parts)
+        return prompt_parts
     
     def _parse_feedback_response(self, response_text: str) -> List[Dict[str, Any]]:
         """Parse feedback response from Gemini."""

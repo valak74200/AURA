@@ -14,7 +14,7 @@ import json
 from genai_processors import Processor, ProcessorPart
 from genai_processors import streams
 
-from models.session import PresentationSessionData
+from models.session import PresentationSessionData, SupportedLanguage
 from models.feedback import RealTimeFeedback, SessionFeedback
 from app.config import get_settings
 from utils.logging import get_logger
@@ -23,6 +23,7 @@ from processors.analysis_processor import AnalysisProcessor
 from processors.metrics_processor import MetricsProcessor
 from utils.exceptions import ProcessorException, PipelineException
 from services.audio_service import AudioService
+from utils.language_config import get_language_config, get_ui_message
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -38,7 +39,7 @@ class AuraPipeline(Processor):
     
     def __init__(self, session: PresentationSessionData):
         """
-        Initialize the complete AURA pipeline.
+        Initialize the complete AURA pipeline with multilingual support.
         
         Args:
             session: The presentation session configuration and state
@@ -47,6 +48,8 @@ class AuraPipeline(Processor):
         self.session = session
         self.session_id = session.id
         self.config = session.config
+        self.language = session.config.language if session.config else SupportedLanguage.FRENCH
+        self.language_config = get_language_config(self.language)
         
         # Initialize all processors
         self.analysis_processor = AnalysisProcessor(session.config)
@@ -451,43 +454,143 @@ class AuraPipeline(Processor):
             yield milestone_part
     
     def _generate_realtime_insights(self, analysis_result: Dict[str, Any], feedback_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate immediate insights for real-time coaching."""
+        """Generate immediate insights for real-time coaching with language adaptation."""
         insights = {
             "immediate_suggestions": [],
             "performance_alerts": [],
             "encouragement": "",
-            "next_focus": ""
+            "next_focus": "",
+            "language": self.language.value
         }
         
-        # Extract real-time insights from analysis
+        # Extract real-time insights from analysis with language adaptation
         if analysis_result and not analysis_result.get("error"):
             realtime_insights = analysis_result.get("realtime_insights", [])
             insights["immediate_suggestions"].extend(realtime_insights)
             
-            # Performance alerts based on quality
+            # Language-specific performance alerts based on analysis
+            self._add_language_specific_alerts(analysis_result, insights)
+            
+            # Performance alerts based on quality  
             quality_assessment = analysis_result.get("quality_assessment", {})
             overall_quality = quality_assessment.get("overall_quality", 0)
             
             if overall_quality < 0.5:
                 insights["performance_alerts"].append({
                     "type": "quality_warning",
-                    "message": "Concentrez-vous sur les bases : rythme, volume et clarté",
+                    "message": get_ui_message("needs_improvement", self.language, "Focus on the basics"),
                     "priority": "high"
                 })
             elif overall_quality > 0.8:
                 insights["performance_alerts"].append({
-                    "type": "quality_excellent",
-                    "message": "Performance excellente ! Maintenez ce niveau",
+                    "type": "quality_excellent", 
+                    "message": get_ui_message("excellent_performance", self.language, "Excellent performance!"),
                     "priority": "positive"
                 })
         
         # Extract encouragement from feedback
         if feedback_result and not feedback_result.get("error"):
             ai_feedback = feedback_result.get("ai_generated_feedback", {})
-            insights["encouragement"] = ai_feedback.get("encouragement", "Continuez vos efforts !")
-            insights["next_focus"] = ai_feedback.get("next_focus", "Maintenir la consistance")
+            default_encouragement = get_ui_message("keep_practicing", self.language, "Keep practicing!")
+            default_focus = "Maintenir la consistance" if self.language == SupportedLanguage.FRENCH else "Maintain consistency"
+            
+            insights["encouragement"] = ai_feedback.get("encouragement", default_encouragement)
+            insights["next_focus"] = ai_feedback.get("next_focus", default_focus)
         
         return insights
+    
+    def _add_language_specific_alerts(self, analysis_result: Dict[str, Any], insights: Dict[str, Any]):
+        """Add language-specific performance alerts based on analysis."""
+        
+        # Check language-specific analysis results
+        language_score = analysis_result.get("language_specific_score", {})
+        if not language_score:
+            return
+            
+        # Pace-specific alerts
+        pace_analysis = analysis_result.get("pace_analysis", {})
+        if pace_analysis:
+            pace_feedback = pace_analysis.get("pace_feedback", "")
+            if pace_feedback == "too_fast":
+                message = get_ui_message("pace_too_fast", self.language, "Slow down slightly")
+                insights["performance_alerts"].append({
+                    "type": "pace_warning",
+                    "message": message,
+                    "priority": "medium"
+                })
+            elif pace_feedback == "too_slow":
+                message = get_ui_message("pace_too_slow", self.language, "Speed up slightly")
+                insights["performance_alerts"].append({
+                    "type": "pace_warning", 
+                    "message": message,
+                    "priority": "medium"
+                })
+            elif pace_feedback == "optimal":
+                message = get_ui_message("pace_good", self.language, "Perfect pace")
+                insights["performance_alerts"].append({
+                    "type": "pace_excellent",
+                    "message": message,
+                    "priority": "positive"
+                })
+        
+        # Volume-specific alerts
+        volume_analysis = analysis_result.get("volume_analysis", {})
+        if volume_analysis:
+            volume_level = volume_analysis.get("volume_level", "")
+            if volume_level == "too_low":
+                message = get_ui_message("volume_too_low", self.language, "Speak louder")
+                insights["performance_alerts"].append({
+                    "type": "volume_warning",
+                    "message": message,
+                    "priority": "high"
+                })
+            elif volume_level == "too_high":
+                message = get_ui_message("volume_too_high", self.language, "Lower your volume")
+                insights["performance_alerts"].append({
+                    "type": "volume_warning",
+                    "message": message,
+                    "priority": "medium"
+                })
+            elif volume_level == "appropriate":
+                message = get_ui_message("volume_good", self.language, "Good volume")
+                insights["performance_alerts"].append({
+                    "type": "volume_good", 
+                    "message": message,
+                    "priority": "positive"
+                })
+        
+        # Clarity-specific alerts
+        clarity_analysis = analysis_result.get("clarity_analysis", {})
+        if clarity_analysis:
+            clarity_level = clarity_analysis.get("clarity_level", "")
+            if clarity_level == "needs_improvement":
+                message = get_ui_message("clarity_needs_work", self.language, "Focus on clearer articulation")
+                insights["performance_alerts"].append({
+                    "type": "clarity_warning",
+                    "message": message,
+                    "priority": "medium"
+                })
+            elif clarity_level == "excellent":
+                message = get_ui_message("clarity_excellent", self.language, "Excellent clarity")
+                insights["performance_alerts"].append({
+                    "type": "clarity_excellent",
+                    "message": message,
+                    "priority": "positive"
+                })
+        
+        # Pitch variation alerts
+        pitch_analysis = analysis_result.get("pitch_analysis", {})
+        if pitch_analysis:
+            if pitch_analysis.get("monotone_warning", False):
+                if self.language == SupportedLanguage.FRENCH:
+                    message = "Variez votre intonation pour maintenir l'attention"
+                else:
+                    message = "Add more vocal variety to maintain engagement" 
+                insights["performance_alerts"].append({
+                    "type": "intonation_warning",
+                    "message": message,
+                    "priority": "medium"
+                })
     
     def _extract_realtime_suggestions(self, results: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Extract real-time suggestions from processing results."""

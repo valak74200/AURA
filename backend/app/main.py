@@ -20,6 +20,7 @@ from app.database import create_tables, check_database_connection
 from models.feedback import ErrorResponse
 from utils.exceptions import AuraException
 from utils.logging import get_logger, setup_logging
+from utils.json_encoder import serialize_response_data
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -115,9 +116,9 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=["*"],  # Allow all origins for development
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allow_methods=["*"],  # Allow all methods
     allow_headers=["*"],
 )
 
@@ -184,13 +185,14 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         }
     )
     
+    error_data = {
+        "error": "HTTP_ERROR",
+        "message": exc.detail,
+        "timestamp": datetime.utcnow().isoformat()
+    }
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "error": "HTTP_ERROR",
-            "message": exc.detail,
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        content=serialize_response_data(error_data)
     )
 
 
@@ -205,13 +207,14 @@ async def internal_server_error_handler(request: Request, exc: Exception):
         }
     )
     
+    internal_error_data = {
+        "error": "INTERNAL_SERVER_ERROR",
+        "message": "Une erreur interne s'est produite",
+        "timestamp": datetime.utcnow().isoformat()
+    }
     return JSONResponse(
         status_code=500,
-        content={
-            "error": "INTERNAL_SERVER_ERROR",
-            "message": "Une erreur interne s'est produite",
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        content=serialize_response_data(internal_error_data)
     )
 
 
@@ -228,7 +231,7 @@ from app.api.user import router as user_router
 @app.get("/")
 async def root():
     """Root endpoint."""
-    return {
+    root_data = {
         "message": "AURA - AI Presentation Coach",
         "version": "1.0.0",
         "status": "running",
@@ -240,12 +243,13 @@ async def root():
             "health": "/health"
         }
     }
+    return serialize_response_data(root_data)
 
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {
+    health_data = {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "services": {
@@ -255,12 +259,13 @@ async def health_check():
             "gemini": "connected" if 'gemini' in services else "disconnected"
         }
     }
+    return serialize_response_data(health_data)
 
 
 @app.get("/info")
 async def app_info():
     """Application information."""
-    return {
+    info_data = {
         "name": "AURA",
         "description": "AI-powered presentation coach",
         "version": "1.0.0",
@@ -275,6 +280,7 @@ async def app_info():
             "Analytics dashboard"
         ]
     }
+    return serialize_response_data(info_data)
 
 
 # Test Gemini endpoint
@@ -294,13 +300,14 @@ async def test_gemini(message: str = "Bonjour AURA"):
         
         response = model.generate_content(f"Tu es AURA, un coach de présentation. Réponds à ce message: {message}")
         
-        return {
+        gemini_response = {
             "status": "success",
             "model": settings.default_gemini_model,
             "message": message,
             "response": response.text,
             "timestamp": datetime.utcnow().isoformat()
         }
+        return serialize_response_data(gemini_response)
         
     except Exception as e:
         logger.error(f"Gemini test failed: {e}")

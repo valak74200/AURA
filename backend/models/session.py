@@ -27,6 +27,15 @@ class SessionStatus(str, Enum):
     ERROR = "error"
 
 
+class SupportedLanguage(str, Enum):
+    """Supported languages for AURA coaching."""
+    FRENCH = "fr"
+    ENGLISH = "en"
+    # Future languages can be added here
+    # SPANISH = "es"
+    # GERMAN = "de"
+
+
 class SessionType(str, Enum):
     """Types of presentation sessions."""
     PRACTICE = "practice"
@@ -54,7 +63,7 @@ class SessionConfig(BaseModel):
     
     # Session behavior
     session_type: SessionType = Field(default=SessionType.PRACTICE, description="Type of presentation session")
-    language: str = Field(default="en", description="Primary language for the session")
+    language: SupportedLanguage = Field(default=SupportedLanguage.FRENCH, description="Primary language for the session")
     max_duration: int = Field(default=3600, ge=60, le=7200, description="Maximum session duration in seconds")
     auto_pause_threshold: int = Field(default=30, ge=5, le=300, description="Auto-pause after silence (seconds)")
     
@@ -279,7 +288,7 @@ class PresentationSessionResponse(BaseModel):
     user_id: Optional[str] = None
     title: str
     session_type: str
-    language: str
+    language: SupportedLanguage
     status: SessionStatus
     created_at: datetime
     started_at: Optional[datetime] = None

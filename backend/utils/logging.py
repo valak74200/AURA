@@ -22,6 +22,22 @@ settings = get_settings()
 class JSONFormatter(logging.Formatter):
     """Custom JSON formatter for structured logging."""
     
+    def _is_json_serializable(self, value: Any) -> bool:
+        """Check if a value is JSON serializable."""
+        try:
+            json.dumps(value)
+            return True
+        except (TypeError, ValueError):
+            return False
+    
+    def _safe_serialize(self, value: Any) -> Any:
+        """Safely serialize a value, converting non-serializable objects to strings."""
+        if self._is_json_serializable(value):
+            return value
+        else:
+            # Convert non-serializable objects to string representation
+            return f"<{type(value).__name__}: {str(value)[:100]}>"
+    
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as JSON."""
         log_entry = {
@@ -38,7 +54,7 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
         
-        # Add extra fields from record
+        # Add extra fields from record, safely serializing complex objects
         for key, value in record.__dict__.items():
             if key not in {
                 'name', 'msg', 'args', 'levelname', 'levelno', 'pathname',
@@ -47,7 +63,7 @@ class JSONFormatter(logging.Formatter):
                 'processName', 'process', 'getMessage', 'exc_info',
                 'exc_text', 'stack_info'
             }:
-                log_entry[key] = value
+                log_entry[key] = self._safe_serialize(value)
         
         return json.dumps(log_entry, ensure_ascii=False)
 

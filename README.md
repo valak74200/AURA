@@ -10,29 +10,39 @@
 
 ## 🌟 Fonctionnalités Principales
 
+### 🌍 **Support Multilingue Avancé**
+- **Langues supportées** : Français et Anglais avec adaptation culturelle complète
+- **Analyse audio adaptative** : seuils et métriques optimisés par langue
+- **Coaching culturel** : style français (structure/élégance) vs anglais (engagement/storytelling)
+- **Benchmarks spécifiques** : comparaisons de performance par langue
+- **Interface localisée** : messages et feedback dans la langue de session
+
 ### 🎤 **Analyse Audio Avancée**
 - **Traitement temps réel** de chunks audio (100ms à 16kHz)
 - **Métriques vocales complètes** : volume, clarté, rythme, tonalité, pauses
 - **Support multi-format** : WAV, MP3, M4A, OGG (jusqu'à 10MB)
 - **Détection d'activité vocale** et analyse de qualité automatique
+- **Adaptation linguistique** : paramètres d'analyse optimisés par langue
 
 ### 🤖 **IA de Coaching Intelligente**
 - **Feedback personnalisé** généré par Google Gemini AI
+- **Prompts culturellement adaptés** : différents styles par langue
 - **Suggestions temps réel** pendant la présentation
-- **Analyse contextuelle** basée sur le type de session
-- **Conseils actionnables** en français avec encouragement adaptatif
+- **Analyse contextuelle** basée sur le type de session et la langue
+- **Conseils actionnables** avec encouragement adaptatif culturel
 
-### 📊 **Analytics et Métriques**
-- **Suivi de progression** avec tendances temporelles
-- **Comparaisons benchmark** et objectifs personnels
-- **Détection de jalons** d'amélioration
-- **Rapports détaillés** avec visualisation des progrès
+### 📊 **Analytics et Métriques Multilingues**
+- **Métriques spécifiques par langue** : benchmarks culturels et comparaisons
+- **Scoring adaptatif** : évaluation selon les attentes linguistiques
+- **Suivi de progression** avec tendances temporelles par langue
+- **Détection de jalons** d'amélioration culturellement pertinents
+- **Rapports détaillés** avec insights linguistiques
 
 ### ⚡ **Communication Temps Réel**
 - **WebSocket streaming** pour feedback instantané
 - **Pipeline de traitement** modulaire et extensible
 - **Commandes de contrôle** : start/stop, pause, configuration
-- **Notifications de performance** et alertes live
+- **Notifications de performance** et alertes live localisées
 
 ## 🏗️ Architecture du Système
 
@@ -212,6 +222,26 @@ GET /api/v1/health    # Health check
 GET /api/v1/test      # Tests d'intégration
 ```
 
+### 🌍 Multilingual APIs
+```http
+# Sessions avec support linguistique
+POST /api/v1/sessions
+{
+  "config": {
+    "language": "fr|en",        # Langue de la session
+    "session_type": "practice"
+  }
+}
+
+# Analyse audio avec adaptation linguistique
+POST /api/v1/sessions/{id}/audio/upload
+# → Analyse automatiquement adaptée à la langue de session
+
+# Feedback culturellement adapté
+POST /api/v1/sessions/{id}/feedback/generate
+# → Prompts et style adaptés à la langue
+```
+
 ### ⚡ WebSocket Endpoints
 ```http
 WS /ws/session/{session_id}    # Connexion temps réel
@@ -268,28 +298,43 @@ pytest tests/ --cov=app --cov-report=html
 ### Structure des Tests
 ```
 tests/
-├── conftest.py                 # Configuration pytest
+├── conftest.py                    # Configuration pytest
 ├── test_api/
-│   ├── test_auth.py           # Tests authentification
-│   ├── test_sessions.py       # Tests sessions (24 tests)
-│   └── test_websocket.py      # Tests WebSocket
+│   ├── test_auth.py              # Tests authentification
+│   ├── test_sessions.py          # Tests sessions (24 tests)
+│   └── test_websocket.py         # Tests WebSocket
 ├── test_services/
-│   └── test_auth_service.py   # Tests services
-└── test_processors/           # Tests pipeline
+│   └── test_auth_service.py      # Tests services
+├── test_processors/              # Tests pipeline
+├── test_multilingual.py          # Tests intégration multilingue (15 tests)
+└── test_multilingual_metrics.py  # Tests métriques multilingues (17 tests)
+```
+
+### Tests Multilingues
+```bash
+# Tests complets multilingues
+pytest tests/test_multilingual.py -v
+pytest tests/test_multilingual_metrics.py -v
+
+# Tests par fonctionnalité
+pytest tests/test_multilingual.py::TestLanguageConfiguration -v
+pytest tests/test_multilingual.py::TestMultilingualAudioAnalysis -v
+pytest tests/test_multilingual.py::TestGeminiMultilingual -v
 ```
 
 ## 📊 Modèles de Données
 
-### Session
+### Session Multilingue
 ```python
 {
   "id": "uuid",
   "user_id": "string",
   "title": "string", 
   "session_type": "practice|presentation|training",
-  "language": "fr|en",
+  "language": "fr|en",           # Langue de la session
   "status": "active|completed|paused",
   "config": {
+    "language": "fr|en",         # Configuration linguistique
     "max_duration": 1800,
     "feedback_frequency": 5,
     "real_time_feedback": true,
@@ -301,21 +346,72 @@ tests/
 }
 ```
 
-### Feedback IA
+### Feedback IA Multilingue
 ```python
 {
   "session_id": "uuid",
+  "language": "fr|en",          # Langue du feedback
   "feedback_items": [
     {
-      "type": "volume|pace|clarity",
-      "category": "technique|delivery|content",
+      "type": "volume|pace|clarity|cultural_adaptation",
+      "category": "technique|delivery|content|cultural",
       "severity": "info|warning|critical",
-      "message": "Votre volume est approprié",
+      "message": "Votre volume est approprié", # Localisé
       "score": 0.8,
-      "suggestions": ["Continuez ainsi"]
+      "suggestions": ["Continuez ainsi"],     # Culturellement adapté
+      "cultural_context": "french_formality|english_engagement"
     }
   ],
+  "cultural_adaptation_score": 0.85,  # Score d'adaptation culturelle
   "generated_at": "datetime"
+}
+```
+
+### Métriques Multilingues
+```python
+{
+  "language": "fr|en",
+  "core_metrics": {
+    "pace": {
+      "wpm": 180,
+      "optimal_wpm": 282,      # Différent par langue (fr: 282, en: 222)
+      "score": 0.85,
+      "feedback": "Rythme adapté au français"
+    },
+    "volume": {
+      "level": 0.06,
+      "target_level": 0.06,    # Optimisé par langue
+      "score": 0.9
+    },
+    "clarity": {
+      "raw_score": 0.85,
+      "adjusted_score": 0.88,  # Pondéré par langue
+      "weight_applied": 1.2
+    }
+  },
+  "cultural_metrics": {
+    "cultural_adaptation_score": 0.82,
+    "cultural_factors": {
+      "formality_level": 0.85,      # Important en français
+      "engagement_style": 0.78,     # Important en anglais
+      "directness_level": 0.60,
+      "emotional_expression": 0.75
+    }
+  },
+  "benchmark_comparison": {
+    "overall_percentile": 75,        # Comparé aux locuteurs de cette langue
+    "strengths": ["pace", "clarity"],
+    "improvement_areas": ["pitch_variation"]
+  },
+  "language_insights": [
+    {
+      "type": "cultural",
+      "level": "excellent",
+      "title": "Maîtrise du Style Français",
+      "message": "Vous maîtrisez les codes de présentation français",
+      "action": "Continuez à cultiver cette élégance"
+    }
+  ]
 }
 ```
 

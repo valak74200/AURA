@@ -15,6 +15,8 @@ import json
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Body, Query, status
 from fastapi.responses import JSONResponse
 
+from utils.json_encoder import serialize_response_data
+
 from models.session import (
     PresentationSessionData, PresentationSessionResponse, SessionConfig, SessionStatus, SessionType,
     CreateSessionRequest, UpdateSessionRequest
@@ -337,11 +339,12 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             
             logger.info(f"Processing audio upload for session {session_id}, file: {file.filename}")
             
-            # Process audio through service
+            # Process audio through service with language adaptation
             audio_result = await audio_service.process_audio_file(
                 audio_data=content,
                 filename=file.filename,
-                session_id=str(session_id)
+                session_id=str(session_id),
+                language=session.config.language
             )
             
             processing_result = {
@@ -391,7 +394,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
-                content=processing_result
+                content=serialize_response_data(processing_result)
             )
             
         except HTTPException:
@@ -470,13 +473,15 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
                     "timestamp": datetime.utcnow().isoformat()
                 })
             
+            chunk_response = {
+                "session_id": str(session_id),
+                "analysis_results": analysis_results,
+                "processing_timestamp": datetime.utcnow().isoformat()
+            }
+            
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
-                content={
-                    "session_id": str(session_id),
-                    "analysis_results": analysis_results,
-                    "processing_timestamp": datetime.utcnow().isoformat()
-                }
+                content=serialize_response_data(chunk_response)
             )
             
         except HTTPException:
@@ -525,14 +530,16 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             # Apply pagination
             feedback_items = filtered_feedback[offset:offset + limit]
             
+            feedback_response = {
+                "session_id": str(session_id),
+                "feedback_items": [item.dict() if hasattr(item, 'dict') else item for item in feedback_items],
+                "total_count": len(feedback_items),
+                "retrieved_at": datetime.utcnow().isoformat()
+            }
+            
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
-                content={
-                    "session_id": str(session_id),
-                    "feedback_items": [item.dict() if hasattr(item, 'dict') else item for item in feedback_items],
-                    "total_count": len(feedback_items),
-                    "retrieved_at": datetime.utcnow().isoformat()
-                }
+                content=serialize_response_data(feedback_response)
             )
             
         except HTTPException:
@@ -607,13 +614,15 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
                 # Save to storage
                 await storage_service.store_feedback(session_id, [feedback_item])
                 
+                custom_feedback_response = {
+                    "session_id": str(session_id),
+                    "feedback": feedback_item,
+                    "generated_at": datetime.utcnow().isoformat()
+                }
+                
                 return JSONResponse(
                     status_code=status.HTTP_200_OK,
-                    content={
-                        "session_id": str(session_id),
-                        "feedback": feedback_item,
-                        "generated_at": datetime.utcnow().isoformat()
-                    }
+                    content=serialize_response_data(custom_feedback_response)
                 )
                 
             except Exception as e:
@@ -701,7 +710,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
-                content=analytics
+                content=serialize_response_data(analytics)
             )
             
         except HTTPException:
@@ -784,7 +793,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
         
         return JSONResponse(
             status_code=status_code,
-            content=health_status
+            content=serialize_response_data(health_status)
         )
     
     @router.get("/test")
@@ -876,7 +885,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
         
         return JSONResponse(
             status_code=status_code,
-            content=test_results
+            content=serialize_response_data(test_results)
         )
     
     return router 

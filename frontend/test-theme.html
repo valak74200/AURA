@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Thème AURA</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#eff6ff',
+                            100: '#dbeafe',
+                            200: '#bfdbfe',
+                            300: '#93c5fd',
+                            400: '#60a5fa',
+                            500: '#3b82f6',
+                            600: '#2563eb',
+                            700: '#1d4ed8',
+                            800: '#1e40af',
+                            900: '#1e3a8a',
+                        }
+                    }
+                }
+            }
+        }
+
+        function toggleTheme() {
+            const html = document.documentElement;
+            if (html.classList.contains('dark')) {
+                html.classList.remove('dark');
+                localStorage.setItem('theme', 'light');
+            } else {
+                html.classList.add('dark');
+                localStorage.setItem('theme', 'dark');
+            }
+        }
+
+        // Initialize theme
+        document.addEventListener('DOMContentLoaded', function() {
+            const savedTheme = localStorage.getItem('theme');
+            const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            
+            if (savedTheme === 'dark' || (!savedTheme && systemPrefersDark)) {
+                document.documentElement.classList.add('dark');
+            }
+        });
+    </script>
+</head>
+<body class="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
+    <div class="p-8">
+        <div class="max-w-md mx-auto bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+            <h1 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">Test Thème AURA</h1>
+            <p class="text-gray-600 dark:text-gray-400 mb-6">
+                Ce test vérifie que le système de thème fonctionne correctement.
+            </p>
+            
+            <button 
+                onclick="toggleTheme()"
+                class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg transition-colors"
+            >
+                Basculer le thème
+            </button>
+            
+            <div class="mt-6 p-4 bg-gray-100 dark:bg-gray-700 rounded-lg">
+                <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">État actuel:</h2>
+                <p class="text-gray-600 dark:text-gray-400">
+                    Le thème devrait changer instantanément quand vous cliquez sur le bouton.
+                </p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

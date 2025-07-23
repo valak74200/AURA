@@ -14,12 +14,13 @@ import statistics
 
 from genai_processors import Processor, ProcessorPart
 
-from models.session import SessionConfig
+from models.session import SessionConfig, SupportedLanguage
 from models.analytics import PerformanceMetric, MetricType
 from models.feedback import VoiceMetrics
 from utils.logging import get_logger
 from utils.exceptions import ProcessorException
 from app.config import get_settings
+from services.multilingual_metrics_service import MultilingualMetricsService, create_multilingual_metrics_service
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -40,6 +41,10 @@ class MetricsProcessor(Processor):
         """
         super().__init__()
         self.config = config
+        self.language = config.language if config else SupportedLanguage.FRENCH
+        
+        # Initialize multilingual metrics service
+        self.multilingual_metrics = create_multilingual_metrics_service()
         
         # Metrics tracking with sliding windows
         self.metrics_buffer = {
@@ -128,6 +133,9 @@ class MetricsProcessor(Processor):
                     # Calculate advanced analytics
                     analytics_results = await self._calculate_advanced_analytics()
                     
+                    # Calculate language-specific metrics
+                    language_metrics = await self._calculate_language_specific_metrics(input_part.text)
+                    
                     # Generate performance insights
                     performance_insights = await self._generate_performance_insights()
                     
@@ -136,6 +144,7 @@ class MetricsProcessor(Processor):
                         data={
                             "metrics": metrics_results,
                             "analytics": analytics_results,
+                            "language_specific_metrics": language_metrics,
                             "performance_insights": performance_insights,
                             "session_summary": self._generate_session_summary(),
                             "benchmarks": self._calculate_benchmark_comparisons(metrics_results),
@@ -143,7 +152,8 @@ class MetricsProcessor(Processor):
                                 "processor": self.__class__.__name__,
                                 "calculation_timestamp": datetime.utcnow().isoformat(),
                                 "processing_time_ms": (datetime.utcnow() - start_time).total_seconds() * 1000,
-                                "chunk_number": input_part.metadata.get("chunk_number", 0)
+                                "chunk_number": input_part.metadata.get("chunk_number", 0),
+                                "language": self.language.value
                             }
                         },
                         type="performance_metrics",
@@ -237,6 +247,45 @@ class MetricsProcessor(Processor):
         self.session_metrics["total_words_spoken"] += chunk_metrics.get("estimated_words", 0)
         
         return voice_metrics
+    
+    async def _calculate_language_specific_metrics(self, analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate language-specific performance metrics and benchmarks."""
+        try:
+            # Extract voice metrics from analysis data
+            if isinstance(analysis_data, dict):
+                voice_metrics = analysis_data.get("chunk_metrics", {})
+                advanced_metrics = analysis_data.get("advanced_metrics", {})
+                
+                # Combine all relevant metrics
+                combined_metrics = {**voice_metrics, **advanced_metrics}
+            else:
+                # Fallback if analysis_data is not in expected format
+                combined_metrics = {}
+            
+            # Create session context
+            session_context = {
+                "session_type": self.config.session_type.value if self.config and self.config.session_type else "practice",
+                "total_chunks_processed": self.session_metrics["total_chunks_processed"],
+                "session_duration": (datetime.utcnow() - self.session_metrics["session_start_time"]).total_seconds()
+            }
+            
+            # Calculate language-specific metrics
+            language_metrics = self.multilingual_metrics.calculate_language_specific_metrics(
+                voice_metrics=combined_metrics,
+                language=self.language,
+                session_context=session_context
+            )
+            
+            logger.debug(f"Calculated language-specific metrics for {self.language.value}")
+            return language_metrics
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate language-specific metrics: {e}")
+            return {
+                "error": str(e),
+                "language": self.language.value,
+                "timestamp": datetime.utcnow().isoformat()
+            }
     
     def _update_metrics_buffers(self, chunk_metrics: Dict[str, Any], advanced_metrics: Dict[str, Any]):
         """Update sliding window buffers with new metrics."""

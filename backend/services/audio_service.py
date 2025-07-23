@@ -16,14 +16,21 @@ from utils.audio_utils import (
     AudioBuffer, 
     analyze_voice_metrics, 
     convert_audio_format,
-    process_audio_stream_async
+    process_audio_stream_async,
+    validate_audio_data,
+    detect_audio_format,
+    load_audio_with_fallbacks,
+    PYDUB_AVAILABLE,
+    SCIPY_AVAILABLE
 )
 from utils.exceptions import (
     AudioProcessingException,
     InvalidAudioFormatError,
     AudioTooLargeError
 )
+from utils.json_encoder import serialize_response_data
 from app.config import get_settings
+from models.session import SupportedLanguage
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -52,7 +59,8 @@ class AudioService:
     async def process_audio_file(self, 
                                 audio_data: bytes, 
                                 filename: str,
-                                session_id: Optional[str] = None) -> Dict[str, Any]:
+                                session_id: Optional[str] = None,
+                                language: SupportedLanguage = SupportedLanguage.FRENCH) -> Dict[str, Any]:
         """
         Process uploaded audio file with comprehensive voice analysis.
         
@@ -60,6 +68,7 @@ class AudioService:
             audio_data: Raw audio file bytes
             filename: Original filename
             session_id: Optional session identifier
+            language: Target language for analysis adaptation
             
         Returns:
             Dict containing processing results and voice metrics
@@ -67,49 +76,59 @@ class AudioService:
         start_time = datetime.utcnow()
         
         try:
-            # Validate file size
-            if len(audio_data) > settings.max_audio_file_size:
-                raise AudioTooLargeError(
-                    f"File size {len(audio_data)} exceeds limit {settings.max_audio_file_size}"
-                )
+            # Comprehensive audio validation with detailed error reporting
+            validation_result = validate_audio_data(
+                audio_data, 
+                max_size=settings.max_audio_file_size
+            )
             
-            # Validate file format
-            file_extension = filename.split('.')[-1].lower() if '.' in filename else 'unknown'
-            if file_extension not in settings.supported_audio_formats:
-                raise InvalidAudioFormatError(file_extension, settings.supported_audio_formats)
+            if not validation_result["valid"]:
+                if "too large" in validation_result["error"].lower():
+                    raise AudioTooLargeError(validation_result["error"])
+                elif "empty" in validation_result["error"].lower():
+                    raise AudioProcessingException("Audio file is empty")
+                else:
+                    raise AudioProcessingException(validation_result["error"])
             
-            # Convert to standard format (16kHz WAV)
+            # Log validation warnings if any
+            if validation_result["warnings"]:
+                for warning in validation_result["warnings"]:
+                    logger.warning(f"Audio validation warning: {warning}")
+            
+            # Get detected format info
+            detected_format = validation_result["format"]
+            file_extension = filename.split('.')[-1].lower() if '.' in filename else detected_format
+            
+            logger.info(
+                f"Processing audio file: {filename} ({file_extension}) - "
+                f"Detected: {detected_format}, Size: {validation_result['size_bytes']} bytes, "
+                f"Duration: {validation_result.get('duration_seconds', 'unknown')}s"
+            )
+            
+            # Load audio using fallback methods (already validated, so should work)
             try:
+                full_audio, actual_sample_rate = load_audio_with_fallbacks(
+                    audio_data,
+                    target_sample_rate=settings.audio_sample_rate
+                )
+                
+                # Convert to standard format for compatibility
                 converted_audio = convert_audio_format(
                     audio_data,
                     target_format="wav",
                     target_sample_rate=settings.audio_sample_rate
                 )
-            except (ValueError, IOError) as e:
-                raise AudioProcessingException(f"Audio conversion failed: {e}")
-            except MemoryError:
-                raise AudioTooLargeError("Audio file too large to process")
+                
             except Exception as e:
-                logger.error(f"Unexpected conversion error: {e}")
-                raise AudioProcessingException(f"Audio conversion failed: {e}")
+                logger.error(f"Audio loading/conversion failed: {e}")
+                raise AudioProcessingException(f"Audio processing failed with enhanced methods: {e}")
             
-            # Load audio for analysis
-            audio_buffer = AudioBuffer(
-                sample_rate=settings.audio_sample_rate,
-                chunk_size=settings.audio_chunk_size
-            )
+            # Verify we have usable audio data
+            if full_audio is None or len(full_audio) == 0:
+                raise AudioProcessingException("No usable audio data after processing")
             
-            # Add audio to buffer
-            if not audio_buffer.add_chunk(converted_audio):
-                raise AudioProcessingException("Failed to add audio to buffer")
-            
-            # Get full audio array for comprehensive analysis
-            full_audio = audio_buffer.peek_chunk(audio_buffer.available_samples())
-            if full_audio is None:
-                raise AudioProcessingException("No audio data available for analysis")
-            
-            # Perform comprehensive voice analysis
-            voice_metrics = analyze_voice_metrics(full_audio, settings.audio_sample_rate)
+            # Perform comprehensive voice analysis with language adaptation
+            voice_metrics = analyze_voice_metrics(full_audio, settings.audio_sample_rate, language)
             
             # Calculate additional metrics
             processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
@@ -132,12 +151,22 @@ class AudioService:
                     "duration_seconds": voice_metrics["duration"],
                     "sample_rate": settings.audio_sample_rate,
                     "format": "wav",
-                    "channels": 1  # Always mono
+                    "channels": 1,  # Always mono
+                    "detected_format": detected_format,
+                    "original_format": file_extension,
+                    "validation_warnings": validation_result.get("warnings", [])
                 },
                 "voice_metrics": voice_metrics,
                 "quality_indicators": self._calculate_quality_indicators(voice_metrics),
                 "session_id": session_id,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
+                "processing_methods_available": {
+                    "soundfile": bool(True),
+                    "pydub": bool(PYDUB_AVAILABLE),
+                    "scipy": bool(SCIPY_AVAILABLE),
+                    "wave": bool(True),
+                    "raw_pcm": bool(True)
+                }
             }
             
             logger.info(
@@ -145,7 +174,8 @@ class AudioService:
                 f"processing_time: {processing_time}ms, session: {session_id}"
             )
             
-            return result
+            # Ensure all boolean values are properly serializable
+            return serialize_response_data(result)
             
         except (AudioTooLargeError, InvalidAudioFormatError, AudioProcessingException) as e:
             self.processing_stats["errors_count"] += 1
@@ -192,7 +222,8 @@ class AudioService:
     async def process_audio_chunk(self, 
                                  session_id: str,
                                  chunk_data: bytes,
-                                 chunk_index: int = 0) -> Dict[str, Any]:
+                                 chunk_index: int = 0,
+                                 language: SupportedLanguage = SupportedLanguage.FRENCH) -> Dict[str, Any]:
         """
         Process individual audio chunk for real-time analysis.
         
@@ -223,16 +254,17 @@ class AudioService:
             
             if audio_chunk is None:
                 # Not enough data yet, return partial result
-                return {
+                buffering_result = {
                     "status": "buffering",
                     "chunk_index": chunk_index,
                     "buffer_size": audio_buffer.available_samples(),
                     "required_size": chunk_size,
                     "session_id": session_id
                 }
+                return serialize_response_data(buffering_result)
             
-            # Analyze chunk
-            voice_metrics = analyze_voice_metrics(audio_chunk, settings.audio_sample_rate)
+            # Analyze chunk with language adaptation
+            voice_metrics = analyze_voice_metrics(audio_chunk, settings.audio_sample_rate, language)
             
             # Calculate processing time
             processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
@@ -255,7 +287,8 @@ class AudioService:
                 "timestamp": datetime.utcnow().isoformat()
             }
             
-            return result
+            # Ensure all boolean values are properly serializable
+            return serialize_response_data(result)
             
         except AudioProcessingException:
             raise
@@ -281,11 +314,11 @@ class AudioService:
                 del self.active_buffers[session_id]
                 logger.info(f"Cleaned up audio resources for session {session_id}")
             
-            return True
+            return bool(True)
             
         except Exception as e:
             logger.error(f"Cleanup failed for session {session_id}: {e}")
-            return False
+            return bool(False)
     
     async def get_processing_stats(self) -> Dict[str, Any]:
         """Get audio processing statistics."""
