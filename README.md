@@ -123,7 +123,7 @@ sequenceDiagram
 
 ### 1. Cloner le Projet
 ```bash
-git clone https://github.com/votre-username/AURA.git
+git clone https://github.com/valak74200/AURA.git
 cd AURA/backend
 ```
 
@@ -448,7 +448,7 @@ utils/                  # Utilitaires
 - [ ] Interface React + Vite.js
 - [ ] Capture microphone temps réel
 - [ ] Dashboard analytics visuel
-- [ ] Mobile app (Flutter)
+- [ ] Mobile app
 
 ### 🚀 Futur
 - [ ] Support multi-langues (EN, ES)
@@ -464,8 +464,7 @@ Ce projet est sous licence MIT. Voir le fichier [LICENSE](LICENSE) pour plus de 
 ## 🆘 Support
 
 - **Documentation API** : http://localhost:8000/docs (Swagger)
-- **Issues** : [GitHub Issues](https://github.com/votre-username/AURA/issues)
-- **Email** : support@aura-coaching.com
+- **Issues** : [GitHub Issues](https://github.com/valak74200/AURA/issues)
 
 ---
 
