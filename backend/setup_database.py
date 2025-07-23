@@ -15,9 +15,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from app.database import create_tables, drop_tables, check_database_connection
 from models.user import User, UserProfile  # Import pour créer les tables
 from models.session import PresentationSession  # Import pour créer les tables
-import structlog
+from utils.logging import get_logger
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 async def setup_database():
     """Configuration complète de la base de données"""

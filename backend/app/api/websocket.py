@@ -15,7 +15,7 @@ import base64
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from fastapi.routing import APIRoute
 
-from models.session import PresentationSession, SessionConfig, SessionStatus, SessionType
+from models.session import PresentationSessionData, SessionConfig, SessionStatus, SessionType
 from models.feedback import RealTimeFeedback, FeedbackType, FeedbackSeverity
 from utils.logging import get_logger
 from utils.exceptions import WebSocketException, AudioProcessingException
@@ -227,7 +227,7 @@ class ConnectionManager:
         session_id: uuid.UUID, 
         user_id: Optional[str], 
         session_type: SessionType
-    ) -> PresentationSession:
+    ) -> PresentationSessionData:
         """Get existing session or create new one."""
         storage_service = self.services['storage']
         

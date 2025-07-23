@@ -10,12 +10,13 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 from uuid import UUID, uuid4
 import io
+import json
 
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Body, Query, status
 from fastapi.responses import JSONResponse
 
 from models.session import (
-    PresentationSession, PresentationSessionResponse, SessionConfig, SessionStatus, SessionType,
+    PresentationSessionData, PresentationSessionResponse, SessionConfig, SessionStatus, SessionType,
     CreateSessionRequest, UpdateSessionRequest
 )
 from models.feedback import SessionFeedback, FeedbackItem
@@ -69,8 +70,8 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             # Create session using storage service
             storage_service = get_storage_service()
             
-            # Create PresentationSession object
-            session = PresentationSession(
+            # Create PresentationSessionData object
+            session = PresentationSessionData(
                 user_id=request.user_id,
                 config=request.config,
                 title=request.title,
@@ -81,7 +82,23 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             session = await storage_service.create_session(session)
             
             logger.info(f"Session created successfully: {session.id}")
-            return session
+            
+            # Convert to response format
+            response_data = PresentationSessionResponse(
+                id=str(session.id),
+                user_id=session.user_id,
+                title=session.title,
+                session_type=session.config.session_type.value,
+                language=session.config.language,
+                status=session.status,
+                created_at=session.created_at,
+                started_at=session.started_at,
+                ended_at=session.ended_at,
+                duration=0,
+                config=session.config.dict() if session.config else None
+            )
+            
+            return response_data
             
         except Exception as e:
             logger.error(f"Failed to create session: {e}")
@@ -107,7 +124,22 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
                     detail=f"Session {session_id} not found"
                 )
             
-            return session
+            # Convert to response format
+            response_data = PresentationSessionResponse(
+                id=str(session.id),
+                user_id=session.user_id,
+                title=session.title,
+                session_type=session.config.session_type.value,
+                language=session.config.language,
+                status=session.status,
+                created_at=session.created_at,
+                started_at=session.started_at,
+                ended_at=session.ended_at,
+                duration=0,
+                config=session.config.dict() if session.config else None
+            )
+            
+            return response_data
             
         except HTTPException:
             raise
@@ -141,7 +173,25 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             # Apply pagination manually
             sessions = all_sessions[offset:offset + limit]
             
-            return sessions
+            # Convert to response format
+            response_sessions = []
+            for session in sessions:
+                response_data = PresentationSessionResponse(
+                    id=str(session.id),
+                    user_id=session.user_id,
+                    title=session.title,
+                    session_type=session.config.session_type.value,
+                    language=session.config.language,
+                    status=session.status,
+                    created_at=session.created_at,
+                    started_at=session.started_at,
+                    ended_at=session.ended_at,
+                    duration=0,
+                    config=session.config.dict() if session.config else None
+                )
+                response_sessions.append(response_data)
+            
+            return response_sessions
             
         except Exception as e:
             logger.error(f"Failed to list sessions: {e}")
@@ -175,7 +225,23 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             )
             
             logger.info(f"Session {session_id} updated successfully")
-            return updated_session
+            
+            # Convert to response format
+            response_data = PresentationSessionResponse(
+                id=str(updated_session.id),
+                user_id=updated_session.user_id,
+                title=updated_session.title,
+                session_type=updated_session.config.session_type.value,
+                language=updated_session.config.language,
+                status=updated_session.status,
+                created_at=updated_session.created_at,
+                started_at=updated_session.started_at,
+                ended_at=updated_session.ended_at,
+                duration=0,
+                config=updated_session.config.dict() if updated_session.config else None
+            )
+            
+            return response_data
             
         except HTTPException:
             raise
@@ -295,13 +361,14 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
                     # Create audio part for pipeline processing
                     audio_metrics = audio_result.get("voice_metrics", {})
                     audio_part = ProcessorPart(
-                        data=audio_metrics,
-                        type="audio_analysis",
+                        json.dumps(audio_metrics) if isinstance(audio_metrics, dict) else str(audio_metrics),
+                        mimetype="application/json",
                         metadata={
                             "session_id": str(session_id),
                             "filename": file.filename,
                             "file_processing": True,
-                            "timestamp": datetime.utcnow().isoformat()
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "type": "audio_analysis"
                         }
                     )
                     
@@ -373,9 +440,16 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             # Initialize pipeline
             pipeline = AuraPipeline(session)
             
+            # Convert audio array to bytes if it's a list
+            audio_array = audio_data["audio_array"]
+            if isinstance(audio_array, list):
+                audio_bytes = bytes(audio_array)
+            else:
+                audio_bytes = audio_array
+            
             # Create audio part (using correct GenAI Processors syntax)
             audio_part = ProcessorPart(
-                audio_data["audio_array"],
+                audio_bytes,
                 mimetype="audio/wav",
                 metadata={
                     "session_id": str(session_id),
@@ -483,7 +557,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
         """
         try:
             storage_service = get_storage_service()
-            gemini_service = get_gemini_service()
+            gemini_service = services.get('gemini')
             # Verify session exists
             session = await storage_service.get_session(session_id)
             if not session:
@@ -651,7 +725,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
         # Get services dynamically
         storage_service = get_storage_service()
         audio_service = get_audio_service()
-        gemini_service = get_gemini_service()
+        gemini_service = services.get('gemini')
         
         health_status = {
             "status": "healthy",
@@ -681,7 +755,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
         try:
             if audio_service:
                 # Test audio service
-                stats = audio_service.get_processing_stats()
+                stats = await audio_service.get_processing_stats()
                 health_status["services"]["audio_processing"] = "healthy"
                 # Don't include stats to avoid serialization issues
         except Exception as e:
@@ -723,7 +797,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
         # Get services dynamically
         storage_service = get_storage_service()
         audio_service = get_audio_service()
-        gemini_service = get_gemini_service()
+        gemini_service = services.get('gemini')
         
         test_results = {
             "timestamp": datetime.utcnow().isoformat(),
@@ -739,7 +813,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
                     session_type=SessionType.PRACTICE,
                     language="fr"
                 )
-                test_session = PresentationSession(
+                test_session = PresentationSessionData(
                     user_id="test_user",
                     config=test_config
                 )
@@ -758,7 +832,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
         # Test audio service
         try:
             if audio_service:
-                stats = audio_service.get_processing_stats()
+                stats = await audio_service.get_processing_stats()
                 test_results["tests"]["audio_processing"] = "passed"
                 # Don't include stats to avoid serialization issues
             else:
@@ -782,7 +856,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
         try:
             # Create minimal test session
             test_config = SessionConfig(session_type=SessionType.PRACTICE, language="fr")
-            test_session = PresentationSession(
+            test_session = PresentationSessionData(
                 id=uuid4(),
                 user_id="test_user",
                 config=test_config,

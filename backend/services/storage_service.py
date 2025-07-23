@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, List
 from uuid import UUID
 from datetime import datetime
 
-from models.session import PresentationSession, SessionStatus
+from models.session import PresentationSessionData, SessionStatus
 from models.feedback import SessionFeedback
 from utils.logging import get_logger
 
@@ -19,21 +19,21 @@ class StorageService:
     def __init__(self):
         self.logger = logger
         # In-memory storage for development (replace with Redis/DB in production)
-        self._sessions: Dict[UUID, PresentationSession] = {}
+        self._sessions: Dict[UUID, PresentationSessionData] = {}
         self._feedback: Dict[UUID, List[SessionFeedback]] = {}
     
-    async def create_session(self, session: PresentationSession) -> PresentationSession:
+    async def create_session(self, session: PresentationSessionData) -> PresentationSessionData:
         """Create a new presentation session."""
         self._sessions[session.id] = session
         self._feedback[session.id] = []
         logger.info(f"Created session {session.id}")
         return session
     
-    async def get_session(self, session_id: UUID) -> Optional[PresentationSession]:
+    async def get_session(self, session_id: UUID) -> Optional[PresentationSessionData]:
         """Retrieve a session by ID."""
         return self._sessions.get(session_id)
     
-    async def update_session(self, session_id: UUID, updates: Dict[str, Any]) -> Optional[PresentationSession]:
+    async def update_session(self, session_id: UUID, updates: Dict[str, Any]) -> Optional[PresentationSessionData]:
         """Update session data."""
         if session_id not in self._sessions:
             return None
@@ -56,7 +56,7 @@ class StorageService:
             return True
         return False
     
-    async def list_sessions(self, user_id: Optional[str] = None, status: Optional[SessionStatus] = None) -> List[PresentationSession]:
+    async def list_sessions(self, user_id: Optional[str] = None, status: Optional[SessionStatus] = None) -> List[PresentationSessionData]:
         """List sessions with optional filters."""
         sessions = list(self._sessions.values())
         

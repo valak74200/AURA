@@ -106,9 +106,9 @@ class SessionMetadata(BaseModel):
     connection_quality: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Connection quality score")
 
 
-class PresentationSession(BaseModel):
+class PresentationSessionData(BaseModel):
     """
-    Main session model representing a complete presentation coaching session.
+    Pydantic model for presentation session data validation and serialization.
     
     This model tracks the full lifecycle of a session from creation to completion,
     including configuration, state, and metadata.

@@ -85,7 +85,12 @@ class AudioService:
                     target_format="wav",
                     target_sample_rate=settings.audio_sample_rate
                 )
+            except (ValueError, IOError) as e:
+                raise AudioProcessingException(f"Audio conversion failed: {e}")
+            except MemoryError:
+                raise AudioTooLargeError("Audio file too large to process")
             except Exception as e:
+                logger.error(f"Unexpected conversion error: {e}")
                 raise AudioProcessingException(f"Audio conversion failed: {e}")
             
             # Load audio for analysis
@@ -177,8 +182,11 @@ class AudioService:
             
             return audio_buffer
             
-        except Exception as e:
+        except (ValueError, MemoryError) as e:
             logger.error(f"Failed to create audio stream: {e}")
+            raise AudioProcessingException(f"Stream creation failed: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected stream creation error: {e}")
             raise AudioProcessingException(f"Stream creation failed: {e}")
     
     async def process_audio_chunk(self, 
@@ -249,8 +257,13 @@ class AudioService:
             
             return result
             
-        except Exception as e:
+        except AudioProcessingException:
+            raise
+        except (ValueError, MemoryError, IndexError) as e:
             logger.error(f"Chunk processing failed: {e}")
+            raise AudioProcessingException(f"Chunk processing error: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected chunk processing error: {e}")
             raise AudioProcessingException(f"Chunk processing error: {e}")
     
     async def cleanup_session(self, session_id: str) -> bool:

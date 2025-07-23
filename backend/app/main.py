@@ -6,7 +6,6 @@ and API route integration.
 """
 
 import asyncio
-import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict
@@ -73,7 +72,8 @@ async def initialize_services():
         
         services['storage'] = StorageService()
         services['audio'] = AudioService()
-        services['gemini'] = GeminiService(settings)
+        from services.gemini_service import create_gemini_service
+        services['gemini'] = create_gemini_service(settings)
         
         logger.info("All services initialized successfully")
         
@@ -221,12 +221,7 @@ from app.api.websocket import create_websocket_router
 from app.api.auth import router as auth_router
 from app.api.user import router as user_router
 
-# Create routers with services (will be populated during startup)
-api_router = create_router(services)
-websocket_router = create_websocket_router(services)
-
-app.include_router(api_router, prefix="/api/v1", tags=["API"])
-app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
+# Les routers sont créés et attachés dans initialize_services()
 
 
 # Basic endpoints
@@ -319,7 +314,7 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8000,
         reload=True,
         log_level="info"

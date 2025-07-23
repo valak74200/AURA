@@ -44,7 +44,8 @@ class FeedbackProcessor(Processor):
         """
         super().__init__()
         self.config = config
-        self.gemini_service = GeminiService(settings)
+        from services.gemini_service import create_gemini_service
+        self.gemini_service = create_gemini_service(settings)
         
         # Feedback generation state
         self.feedback_history: List[Dict[str, Any]] = []

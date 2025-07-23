@@ -12,19 +12,20 @@ from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
-import structlog
 import uuid
 
 from app.database import get_database
 from models.user import User, UserProfile, UserCreate, UserLogin, Token, TokenData
 from utils.exceptions import AuthenticationError, ValidationError
+from utils.logging import get_logger
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
-# Configuration JWT
-SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-change-in-production")
+# Configuration JWT - Utilise la configuration centralisée
+from app.config import get_settings
+
+settings = get_settings()
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
 # Configuration du hachage des mots de passe
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -37,9 +38,9 @@ class AuthService:
     
     def __init__(self):
         self.pwd_context = pwd_context
-        self.secret_key = SECRET_KEY
+        self.secret_key = settings.secret_key
         self.algorithm = ALGORITHM
-        self.access_token_expire_minutes = ACCESS_TOKEN_EXPIRE_MINUTES
+        self.access_token_expire_minutes = settings.access_token_expire_minutes
     
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """Vérifier un mot de passe"""
@@ -74,7 +75,7 @@ class AuthService:
             return TokenData(user_id=user_id, username=username)
         
         except JWTError as e:
-            logger.warning("JWT verification failed", error=str(e))
+            logger.warning("JWT verification failed", extra={"error": str(e)})
             raise AuthenticationError("Token invalide ou expiré")
     
     async def get_user_by_email(self, db: AsyncSession, email: str) -> Optional[User]:
@@ -115,39 +116,39 @@ class AuthService:
         user = result.scalar_one_or_none()
         
         if not user:
-            logger.info("Authentication failed: user not found", identifier=email_or_username)
+            logger.info("Authentication failed: user not found", extra={"identifier": email_or_username})
             return None
         
         if not user.is_active:
-            logger.info("Authentication failed: user inactive", user_id=str(user.id))
+            logger.info("Authentication failed: user inactive", extra={"user_id": str(user.id)})
             return None
         
         if not self.verify_password(password, user.hashed_password):
-            logger.info("Authentication failed: wrong password", user_id=str(user.id))
+            logger.info("Authentication failed: wrong password", extra={"user_id": str(user.id)})
             return None
         
         # Mettre à jour la dernière connexion
         user.last_login = datetime.utcnow()
         await db.commit()
         
-        logger.info("User authenticated successfully", user_id=str(user.id), username=user.username)
+        logger.info("User authenticated successfully", extra={"user_id": str(user.id), "username": user.username})
         return user
     
     async def create_user(self, db: AsyncSession, user_create: UserCreate) -> User:
         """Créer un nouvel utilisateur"""
         # Vérifier que les mots de passe correspondent
         if user_create.password != user_create.confirm_password:
-            raise ValidationError("Les mots de passe ne correspondent pas")
+            raise ValidationError("password", "Les mots de passe ne correspondent pas")
         
         # Vérifier que l'email n'existe pas déjà
         existing_email = await self.get_user_by_email(db, user_create.email)
         if existing_email:
-            raise ValidationError("Cette adresse email est déjà utilisée")
+            raise ValidationError("email", "Cette adresse email est déjà utilisée")
         
         # Vérifier que le nom d'utilisateur n'existe pas déjà
         existing_username = await self.get_user_by_username(db, user_create.username)
         if existing_username:
-            raise ValidationError("Ce nom d'utilisateur est déjà pris")
+            raise ValidationError("username", "Ce nom d'utilisateur est déjà pris")
         
         # Créer l'utilisateur
         hashed_password = self.get_password_hash(user_create.password)
@@ -172,7 +173,7 @@ class AuthService:
         db.add(db_profile)
         await db.commit()
         
-        logger.info("User created successfully", user_id=str(db_user.id), username=db_user.username)
+        logger.info("User created successfully", extra={"user_id": str(db_user.id), "username": db_user.username})
         return db_user
     
     async def login_user(self, db: AsyncSession, user_login: UserLogin) -> Token:

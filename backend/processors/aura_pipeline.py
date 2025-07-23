@@ -14,7 +14,7 @@ import json
 from genai_processors import Processor, ProcessorPart
 from genai_processors import streams
 
-from models.session import PresentationSession
+from models.session import PresentationSessionData
 from models.feedback import RealTimeFeedback, SessionFeedback
 from app.config import get_settings
 from utils.logging import get_logger
@@ -36,7 +36,7 @@ class AuraPipeline(Processor):
     with real-time streaming and intelligent routing for optimal coaching experience.
     """
     
-    def __init__(self, session: PresentationSession):
+    def __init__(self, session: PresentationSessionData):
         """
         Initialize the complete AURA pipeline.
         
@@ -430,7 +430,11 @@ class AuraPipeline(Processor):
             yield performance_part
         
         # Yield milestone achievements if any
-        milestones = self._check_milestones(results)
+        milestones = self._check_for_milestones(
+            results.get("analysis", {}), 
+            results.get("feedback", {}), 
+            results.get("metrics", {})
+        )
         if milestones:
             milestone_data = {
                 "milestones": milestones,
@@ -484,6 +488,37 @@ class AuraPipeline(Processor):
             insights["next_focus"] = ai_feedback.get("next_focus", "Maintenir la consistance")
         
         return insights
+    
+    def _extract_realtime_suggestions(self, results: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract real-time suggestions from processing results."""
+        suggestions = []
+        
+        # Extract from analysis
+        analysis_result = results.get("analysis", {})
+        if analysis_result and not analysis_result.get("error"):
+            realtime_insights = analysis_result.get("realtime_insights", [])
+            for insight in realtime_insights:
+                suggestions.append({
+                    "type": "analysis_suggestion",
+                    "message": insight,
+                    "priority": "normal",
+                    "source": "voice_analysis"
+                })
+        
+        # Extract from feedback
+        feedback_result = results.get("feedback", {})
+        if feedback_result and not feedback_result.get("error"):
+            ai_feedback = feedback_result.get("ai_generated_feedback", {})
+            immediate_tips = ai_feedback.get("immediate_tips", [])
+            for tip in immediate_tips:
+                suggestions.append({
+                    "type": "coaching_tip",
+                    "message": tip,
+                    "priority": "high",
+                    "source": "ai_feedback"
+                })
+        
+        return suggestions
     
     def _calculate_session_progress(self, analysis_result: Dict[str, Any], metrics_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate session progress indicators."""

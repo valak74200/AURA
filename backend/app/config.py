@@ -40,16 +40,13 @@ class Settings(BaseSettings):
     
     # External Services
     redis_url: str = Field(default="redis://localhost:6379", description="Redis connection URL")
-    database_url: Optional[str] = Field(default=None, description="Database connection URL")
     
     # Performance Tuning
     max_concurrent_sessions: int = Field(default=100, description="Maximum concurrent sessions")
     audio_chunk_size: int = Field(default=1600, description="Audio chunk size for processing")
     audio_sample_rate: int = Field(default=16000, description="Audio sample rate in Hz")
     
-    # Security
-    secret_key: str = Field(..., description="Secret key for JWT tokens")
-    access_token_expire_minutes: int = Field(default=30, description="Access token expiration time")
+    # Security Settings (moved from duplicate above)
     cors_origins: List[str] = Field(
         default=["http://localhost:3000", "http://localhost:8080"],
         description="Allowed CORS origins"

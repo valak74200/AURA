@@ -17,7 +17,6 @@ from tenacity import (
     before_sleep_log
 )
 import json
-import logging
 
 from app.config import get_settings, Settings
 from utils.logging import get_logger
@@ -79,7 +78,7 @@ class GeminiService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
         retry=retry_if_exception_type((AIModelException,)),
-        before_sleep=before_sleep_log(logger, logging.WARNING)
+        before_sleep=before_sleep_log(logger, 30)  # WARNING level = 30
     )
     async def generate_presentation_feedback(
         self,
@@ -121,19 +120,25 @@ class GeminiService:
             
             return feedback_items
             
-        except Exception as e:
-            logger.error(
-                "Failed to generate feedback",
-                extra={"error": str(e)},
-                exc_info=True
-            )
-            
-            if "quota" in str(e).lower():
+        except genai.types.BlockedPromptException as e:
+            logger.warning(f"Prompt was blocked by safety filters: {e}")
+            raise AIModelException("Content was blocked by safety filters", settings.default_gemini_model)
+        except genai.types.StopCandidateException as e:
+            logger.warning(f"Generation stopped due to safety: {e}")
+            raise AIModelException("Generation stopped due to safety concerns", settings.default_gemini_model)
+        except (ConnectionError, TimeoutError) as e:
+            logger.error(f"Network error with Gemini API: {e}")
+            raise AIModelUnavailableError(settings.default_gemini_model)
+        except ValueError as e:
+            if "quota" in str(e).lower() or "429" in str(e):
                 raise AIModelQuotaExceededError(settings.default_gemini_model)
-            elif "unavailable" in str(e).lower() or "503" in str(e):
-                raise AIModelUnavailableError(settings.default_gemini_model)
+            elif "api key" in str(e).lower():
+                raise AIModelException("Invalid API key", settings.default_gemini_model)
             else:
-                raise AIModelException(str(e), settings.default_gemini_model)
+                raise AIModelException(f"Invalid request: {e}", settings.default_gemini_model)
+        except Exception as e:
+            logger.error(f"Unexpected Gemini API error: {e}", exc_info=True)
+            raise AIModelException(f"Unexpected error: {e}", settings.default_gemini_model)
     
     async def analyze_presentation_structure(
         self,
@@ -537,13 +542,8 @@ class GeminiService:
         ]
 
 
-# Global service instance
-_gemini_service = None
-
-
-def get_gemini_service() -> GeminiService:
-    """Get or create Gemini service instance."""
-    global _gemini_service
-    if _gemini_service is None:
-        _gemini_service = GeminiService()
-    return _gemini_service 
+def create_gemini_service(config: Optional[Settings] = None) -> GeminiService:
+    """Create a new Gemini service instance."""
+    if config is None:
+        config = get_settings()
+    return GeminiService(config) 

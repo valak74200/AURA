@@ -6,7 +6,6 @@ Gestion de l'inscription, connexion, profil utilisateur
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
-import structlog
 
 from app.database import get_database
 from models.user import (
@@ -15,8 +14,9 @@ from models.user import (
 )
 from services.auth_service import auth_service, get_current_user, get_current_user_optional
 from utils.exceptions import AuthenticationError, ValidationError
+from utils.logging import get_logger
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -30,17 +30,17 @@ async def register(
     """
     try:
         user = await auth_service.create_user(db, user_create)
-        logger.info("User registered successfully", user_id=str(user.id), username=user.username)
+        logger.info("User registered successfully", extra={"user_id": str(user.id), "username": user.username})
         return UserResponse.from_orm(user)
     
     except ValidationError as e:
-        logger.warning("Registration validation error", error=str(e))
+        logger.warning("Registration validation error", extra={"error": str(e)})
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
-        logger.error("Registration error", error=str(e))
+        logger.error("Registration error", extra={"error": str(e)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erreur lors de l'inscription"
@@ -56,18 +56,18 @@ async def login(
     """
     try:
         token = await auth_service.login_user(db, user_login)
-        logger.info("User logged in successfully", username=user_login.email_or_username)
+        logger.info("User logged in successfully", extra={"username": user_login.email_or_username})
         return token
     
     except AuthenticationError as e:
-        logger.warning("Login authentication error", error=str(e))
+        logger.warning("Login authentication error", extra={"error": str(e)})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
             headers={"WWW-Authenticate": "Bearer"}
         )
     except Exception as e:
-        logger.error("Login error", error=str(e))
+        logger.error("Login error", extra={"error": str(e)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erreur lors de la connexion"
@@ -82,14 +82,25 @@ async def get_current_user_profile(
     Récupérer le profil de l'utilisateur actuel
     """
     try:
-        # Charger le profil utilisateur
-        await db.refresh(current_user, ["profile"])
+        # Charger ou créer le profil utilisateur
+        from models.user import UserProfile
+        from sqlalchemy import select
+        
+        # Chercher le profil existant
+        profile_result = await db.execute(
+            select(UserProfile).where(UserProfile.user_id == current_user.id)
+        )
+        profile = profile_result.scalar_one_or_none()
+        
+        # Créer le profil s'il n'existe pas
+        if not profile:
+            profile = UserProfile(user_id=current_user.id)
+            db.add(profile)
+            await db.commit()
+            await db.refresh(profile)
         
         user_response = UserResponse.from_orm(current_user)
-        profile_response = None
-        
-        if current_user.profile:
-            profile_response = UserProfileResponse.from_orm(current_user.profile)
+        profile_response = UserProfileResponse.from_orm(profile)
         
         return UserWithProfile(
             **user_response.dict(),
@@ -97,7 +108,7 @@ async def get_current_user_profile(
         )
     
     except Exception as e:
-        logger.error("Error fetching user profile", user_id=str(current_user.id), error=str(e))
+        logger.error("Error fetching user profile", extra={"user_id": str(current_user.id), "error": str(e)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erreur lors de la récupération du profil"
@@ -140,12 +151,12 @@ async def update_current_user_profile(
         await db.commit()
         await db.refresh(current_user)
         
-        logger.info("User profile updated successfully", user_id=str(current_user.id))
+        logger.info("User profile updated successfully", extra={"user_id": str(current_user.id)})
         return UserResponse.from_orm(current_user)
     
     except Exception as e:
         await db.rollback()
-        logger.error("Error updating user profile", user_id=str(current_user.id), error=str(e))
+        logger.error("Error updating user profile", extra={"user_id": str(current_user.id), "error": str(e)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erreur lors de la mise à jour du profil"
@@ -163,7 +174,7 @@ async def change_password(
     try:
         # Vérifier que les nouveaux mots de passe correspondent
         if password_change.new_password != password_change.confirm_password:
-            raise ValidationError("Les nouveaux mots de passe ne correspondent pas")
+            raise ValidationError("confirm_password", "Les nouveaux mots de passe ne correspondent pas")
         
         # Vérifier l'ancien mot de passe
         if not auth_service.verify_password(password_change.current_password, current_user.hashed_password):
@@ -173,18 +184,18 @@ async def change_password(
         current_user.hashed_password = auth_service.get_password_hash(password_change.new_password)
         await db.commit()
         
-        logger.info("Password changed successfully", user_id=str(current_user.id))
+        logger.info("Password changed successfully", extra={"user_id": str(current_user.id)})
         return {"message": "Mot de passe modifié avec succès"}
     
     except (ValidationError, AuthenticationError) as e:
-        logger.warning("Password change validation error", user_id=str(current_user.id), error=str(e))
+        logger.warning("Password change validation error", extra={"user_id": str(current_user.id), "error": str(e)})
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
         await db.rollback()
-        logger.error("Error changing password", user_id=str(current_user.id), error=str(e))
+        logger.error("Error changing password", extra={"user_id": str(current_user.id), "error": str(e)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erreur lors du changement de mot de passe"
@@ -196,7 +207,7 @@ async def logout(current_user = Depends(get_current_user)):
     Déconnexion (côté client principalement)
     Note: Avec JWT, la déconnexion se fait côté client en supprimant le token
     """
-    logger.info("User logged out", user_id=str(current_user.id))
+    logger.info("User logged out", extra={"user_id": str(current_user.id)})
     return {"message": "Déconnexion réussie"}
 
 @router.get("/check", response_model=UserResponse)
@@ -238,7 +249,7 @@ async def check_availability(
         return result
     
     except Exception as e:
-        logger.error("Error checking availability", error=str(e))
+        logger.error("Error checking availability", extra={"error": str(e)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erreur lors de la vérification"

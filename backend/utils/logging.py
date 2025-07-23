@@ -385,26 +385,15 @@ class MetricsLogger:
         )
 
 
-# Global logger instances
-_main_logger = None
-_metrics_logger = None
-
-
 def get_main_logger() -> logging.Logger:
     """Get the main application logger."""
-    global _main_logger
-    if _main_logger is None:
-        _main_logger = get_logger("main")
-    return _main_logger
+    return get_logger("main")
 
 
 def get_metrics_logger() -> MetricsLogger:
     """Get the metrics logger instance."""
-    global _metrics_logger
-    if _metrics_logger is None:
-        base_logger = get_logger("metrics")
-        _metrics_logger = MetricsLogger(base_logger)
-    return _metrics_logger
+    base_logger = get_logger("metrics")
+    return MetricsLogger(base_logger)
 
 
 def create_session_logger(session_id: str, **context) -> SessionLogger:

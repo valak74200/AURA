@@ -8,9 +8,10 @@ from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.pool import NullPool
-import structlog
 
-logger = structlog.get_logger(__name__)
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Configuration de la base de données
 DATABASE_URL = os.getenv(
@@ -46,7 +47,7 @@ async def get_database():
         try:
             yield session
         except Exception as e:
-            logger.error("Database session error", error=str(e))
+            logger.error("Database session error", extra={"error": str(e)})
             await session.rollback()
             raise
         finally:
