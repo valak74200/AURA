@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import get_settings
+from app.database import create_tables, check_database_connection
 from models.feedback import ErrorResponse
 from utils.exceptions import AuraException
 from utils.logging import get_logger, setup_logging
@@ -56,6 +57,15 @@ async def initialize_services():
         # Setup logging
         setup_logging()
         
+        # Initialize database
+        logger.info("Initializing database...")
+        db_connected = await check_database_connection()
+        if db_connected:
+            await create_tables()
+            logger.info("Database initialized successfully")
+        else:
+            logger.warning("Database connection failed - some features may not work")
+        
         # Initialize services
         from services.storage_service import StorageService
         from services.audio_service import AudioService
@@ -73,6 +83,8 @@ async def initialize_services():
         
         app.include_router(api_router, prefix="/api/v1", tags=["API"])
         app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
+        app.include_router(auth_router, prefix="/api/v1", tags=["Authentication"])
+        app.include_router(user_router, prefix="/api/v1/user", tags=["User"])
         logger.info("API routers initialized with services")
         
     except Exception as e:
@@ -206,6 +218,8 @@ async def internal_server_error_handler(request: Request, exc: Exception):
 # Include API routes
 from app.api.routes import create_router
 from app.api.websocket import create_websocket_router
+from app.api.auth import router as auth_router
+from app.api.user import router as user_router
 
 # Create routers with services (will be populated during startup)
 api_router = create_router(services)

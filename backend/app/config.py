@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(..., description="Gemini API key for AI processing")
     google_cloud_project: str = Field(..., description="Google Cloud Project ID")
     
+    # Database Settings
+    database_url: str = Field(default="sqlite+aiosqlite:///./aura.db", description="Database connection URL")
+    db_echo: bool = Field(default=False, description="Enable database query logging")
+    
+    # Authentication Settings
+    secret_key: str = Field(..., description="Secret key for JWT tokens")
+    access_token_expire_minutes: int = Field(default=30, description="JWT token expiration in minutes")
+    
     # Application Settings
     debug: bool = Field(default=False, description="Enable debug mode")
     log_level: str = Field(default="INFO", description="Logging level")

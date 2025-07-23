@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Body, Q
 from fastapi.responses import JSONResponse
 
 from models.session import (
-    PresentationSession, SessionConfig, SessionStatus, SessionType,
+    PresentationSession, PresentationSessionResponse, SessionConfig, SessionStatus, SessionType,
     CreateSessionRequest, UpdateSessionRequest
 )
 from models.feedback import SessionFeedback, FeedbackItem
@@ -55,7 +55,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
     
     # ===== SESSION MANAGEMENT ENDPOINTS =====
     
-    @router.post("/sessions", response_model=PresentationSession, status_code=status.HTTP_201_CREATED)
+    @router.post("/sessions", response_model=PresentationSessionResponse, status_code=status.HTTP_201_CREATED)
     async def create_session(request: CreateSessionRequest):
         """
         Create a new presentation coaching session.
@@ -90,7 +90,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
                 detail=f"Failed to create session: {str(e)}"
             )
     
-    @router.get("/sessions/{session_id}", response_model=PresentationSession)
+    @router.get("/sessions/{session_id}", response_model=PresentationSessionResponse)
     async def get_session(session_id: UUID):
         """
         Retrieve a specific presentation session.
@@ -118,7 +118,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
                 detail=f"Failed to retrieve session: {str(e)}"
             )
     
-    @router.get("/sessions", response_model=List[PresentationSession])
+    @router.get("/sessions", response_model=List[PresentationSessionResponse])
     async def list_sessions(
         user_id: Optional[str] = Query(None, description="Filter by user ID"),
         status_filter: Optional[SessionStatus] = Query(None, description="Filter by session status"),
@@ -150,7 +150,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
                 detail=f"Failed to list sessions: {str(e)}"
             )
     
-    @router.put("/sessions/{session_id}", response_model=PresentationSession)
+    @router.put("/sessions/{session_id}", response_model=PresentationSessionResponse)
     async def update_session(session_id: UUID, request: UpdateSessionRequest):
         """
         Update an existing session configuration.

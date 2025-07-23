@@ -10,6 +10,11 @@ from typing import Dict, List, Optional, Any
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, validator
 from enum import Enum
+from sqlalchemy import Column, String, DateTime, Boolean, Text, Integer, ForeignKey
+from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSON
+
+from app.database import Base
 
 
 class SessionStatus(str, Enum):
@@ -266,3 +271,58 @@ class UpdateSessionRequest(BaseModel):
                 "status": "paused"
             }
         } 
+
+
+class PresentationSessionResponse(BaseModel):
+    """Response model for presentation session."""
+    id: str
+    user_id: Optional[str] = None
+    title: str
+    session_type: str
+    language: str
+    status: SessionStatus
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    duration: int = 0
+    config: Optional[Dict[str, Any]] = None
+    stats: Optional[Dict[str, Any]] = None
+    feedback_summary: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+# ============================================================================
+# MODÈLES SQLALCHEMY (BASE DE DONNÉES)
+# ============================================================================
+
+class PresentationSession(Base):
+    __tablename__ = "presentation_sessions"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    
+    # Configuration de session
+    title = Column(String(200), nullable=False)
+    session_type = Column(String(50), nullable=False)  # practice, presentation, training
+    language = Column(String(10), default="fr")
+    
+    # État de la session
+    status = Column(String(20), default="active")  # active, paused, completed, expired
+    
+    # Métadonnées temporelles
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    ended_at = Column(DateTime, nullable=True)
+    duration = Column(Integer, default=0)  # en secondes
+    
+    # Configuration et données
+    config = Column(JSON, nullable=True)
+    stats = Column(JSON, nullable=True)
+    feedback_summary = Column(Text, nullable=True)
+    
+    # Relations
+    user = relationship("User", back_populates="sessions")
+    
+    def __repr__(self):
+        return f"<PresentationSession {self.id} ({self.title})>" 

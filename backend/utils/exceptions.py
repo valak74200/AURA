@@ -481,6 +481,23 @@ class DataIntegrityError(StorageException):
         self.error_code = "DATA_INTEGRITY_ERROR"
 
 
+# ===== AUTHENTICATION EXCEPTIONS =====
+
+class AuthenticationError(AuraException):
+    """Exception raised for authentication-related errors."""
+    
+    def __init__(self, message: str, auth_issue: str = "Unknown", details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code="AUTHENTICATION_ERROR",
+            status_code=401,
+            details={
+                **(details or {}),
+                "auth_issue": auth_issue
+            }
+        )
+
+
 # ===== VALIDATION EXCEPTIONS =====
 
 class ValidationError(AuraException):
