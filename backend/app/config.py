@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     
     # External Services
     redis_url: str = Field(default="redis://localhost:6379", description="Redis connection URL")
+    redis_max_connections: int = Field(default=20, description="Maximum Redis connections in pool")
+    redis_socket_timeout: int = Field(default=5, description="Redis socket timeout in seconds")
+    redis_socket_connect_timeout: int = Field(default=5, description="Redis connection timeout in seconds")
+    
+    # Cache Settings
+    cache_default_ttl: int = Field(default=3600, description="Default cache TTL in seconds")
+    cache_session_ttl: int = Field(default=1800, description="Session cache TTL in seconds")
+    cache_analytics_ttl: int = Field(default=300, description="Analytics cache TTL in seconds")
+    cache_enabled: bool = Field(default=True, description="Enable caching")
     
     # Performance Tuning
     max_concurrent_sessions: int = Field(default=100, description="Maximum concurrent sessions")

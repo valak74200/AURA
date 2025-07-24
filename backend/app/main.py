@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
 
 
 async def initialize_services():
-    """Initialize all application services."""
+    """Initialize all application services with dependency injection."""
     try:
         # Setup logging
         setup_logging()
@@ -66,17 +66,31 @@ async def initialize_services():
         else:
             logger.warning("Database connection failed - some features may not work")
         
-        # Initialize services
-        from services.storage_service import StorageService
-        from services.audio_service import AudioService
-        from services.gemini_service import GeminiService
+        # Initialize service registry with dependency injection
+        from services.service_registry import get_service_registry
+        from services.service_interfaces import (
+            IAudioService, IGeminiService, IStorageService,
+            IAuthService, ICacheService, IHealthCheckService
+        )
         
-        services['storage'] = StorageService()
-        services['audio'] = AudioService()
-        from services.gemini_service import create_gemini_service
-        services['gemini'] = create_gemini_service(settings)
+        service_registry = await get_service_registry()
+        container = service_registry.container
         
-        logger.info("All services initialized successfully")
+        # Get services through dependency injection
+        services['storage'] = await container.get_service(IStorageService)
+        services['audio'] = await container.get_service(IAudioService)
+        services['gemini'] = await container.get_service(IGeminiService)
+        services['auth'] = await container.get_service(IAuthService)
+        services['cache'] = await container.get_service(ICacheService)
+        services['health'] = await container.get_service(IHealthCheckService)
+        
+        # Initialize all services
+        for service_name, service in services.items():
+            if hasattr(service, 'initialize'):
+                await service.initialize()
+                logger.info(f"Initialized {service_name} service")
+        
+        logger.info("All services initialized successfully with dependency injection")
         
         # Create and include routers with initialized services
         api_router = create_router(services)
@@ -86,7 +100,7 @@ async def initialize_services():
         app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
         app.include_router(auth_router, prefix="/api/v1", tags=["Authentication"])
         app.include_router(user_router, prefix="/api/v1/user", tags=["User"])
-        logger.info("API routers initialized with services")
+        logger.info("API routers initialized with dependency-injected services")
         
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}")
@@ -94,8 +108,17 @@ async def initialize_services():
 
 
 async def cleanup_services():
-    """Cleanup application services."""
+    """Cleanup application services with proper dependency injection cleanup."""
     try:
+        # Cleanup all services that have cleanup methods
+        for service_name, service in services.items():
+            if hasattr(service, 'cleanup'):
+                try:
+                    await service.cleanup()
+                    logger.info(f"Cleaned up {service_name} service")
+                except Exception as e:
+                    logger.error(f"Error cleaning up {service_name} service: {e}")
+        
         services.clear()
         logger.info("Services cleanup completed")
     except Exception as e:
@@ -116,7 +139,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for development
+    allow_origins=settings.cors_origins,  # Use configured CORS origins for security
     allow_credentials=True,
     allow_methods=["*"],  # Allow all methods
     allow_headers=["*"],
@@ -281,6 +304,18 @@ async def app_info():
         ]
     }
     return serialize_response_data(info_data)
+
+
+@app.get("/debug/cors")
+async def debug_cors():
+    """Debug CORS configuration."""
+    debug_data = {
+        "cors_origins": settings.cors_origins,
+        "environment": settings.environment,
+        "debug": settings.debug,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    return serialize_response_data(debug_data)
 
 
 # Test Gemini endpoint

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, Suspense } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
@@ -9,15 +9,15 @@ import { LoadingSpinner, ToastProvider } from './components/ui';
 import ErrorBoundary from './components/ErrorBoundary';
 import QueryErrorBoundary from './components/QueryErrorBoundary';
 
-// Page imports
-import LandingPage from './pages/LandingPage';
-import ModernAuthPage from './pages/auth/ModernAuthPage';
-import ModernDashboard from './pages/ModernDashboard';
-import SessionsPage from './pages/sessions/SessionsPage';
-import ModernNewSessionPage from './pages/sessions/ModernNewSessionPage';
-import SessionDetailPage from './pages/sessions/SessionDetailPage';
-import AnalyticsPage from './pages/analytics/AnalyticsPage';
-import SettingsPage from './pages/SettingsPage';
+// Lazy-loaded page imports for better performance
+const LandingPage = React.lazy(() => import('./pages/LandingPage'));
+const ModernAuthPage = React.lazy(() => import('./pages/auth/ModernAuthPage'));
+const ModernDashboard = React.lazy(() => import('./pages/ModernDashboard'));
+const SessionsPage = React.lazy(() => import('./pages/sessions/SessionsPage'));
+const ModernNewSessionPage = React.lazy(() => import('./pages/sessions/ModernNewSessionPage'));
+const SessionDetailPage = React.lazy(() => import('./pages/sessions/SessionDetailPage'));
+const AnalyticsPage = React.lazy(() => import('./pages/analytics/AnalyticsPage'));
+const SettingsPage = React.lazy(() => import('./pages/SettingsPage'));
 
 // Create QueryClient instance
 const queryClient = new QueryClient({
@@ -30,6 +30,16 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// Loading fallback component for lazy-loaded pages
+const PageLoadingFallback: React.FC = () => (
+  <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+    <div className="text-center">
+      <LoadingSpinner size="lg" />
+      <p className="mt-4 text-gray-600 dark:text-gray-400">Loading page...</p>
+    </div>
+  </div>
+);
 
 // Protected Route Component
 interface ProtectedRouteProps {
@@ -97,115 +107,117 @@ function App() {
             <QueryErrorBoundary>
               <ToastProvider position="top-right">
                 <Router>
-                <Routes>
-          {/* Public routes */}
-          <Route
-            path="/login"
-            element={
-              <PublicRoute>
-                <ModernAuthPage mode="login" />
-              </PublicRoute>
-            }
-          />
-          <Route
-            path="/register"
-            element={
-              <PublicRoute>
-                <ModernAuthPage mode="register" />
-              </PublicRoute>
-            }
-          />
-          
-          {/* Protected routes */}
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <ModernLayout>
-                  <ModernDashboard />
-                </ModernLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/sessions"
-            element={
-              <ProtectedRoute>
-                <ModernLayout>
-                  <SessionsPage />
-                </ModernLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/sessions/new"
-            element={
-              <ProtectedRoute>
-                <ModernLayout>
-                  <ModernNewSessionPage />
-                </ModernLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/sessions/:id"
-            element={
-              <ProtectedRoute>
-                <ModernLayout>
-                  <SessionDetailPage />
-                </ModernLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/analytics"
-            element={
-              <ProtectedRoute>
-                <ModernLayout>
-                  <AnalyticsPage />
-                </ModernLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/settings"
-            element={
-              <ProtectedRoute>
-                <ModernLayout>
-                  <SettingsPage />
-                </ModernLayout>
-              </ProtectedRoute>
-            }
-          />
-          
-          {/* Landing page for non-authenticated users */}
-          <Route 
-            path="/" 
-            element={
-              <PublicRoute>
-                <LandingPage />
-              </PublicRoute>
-            } 
-          />
-          
-          {/* 404 fallback */}
-          <Route 
-            path="*" 
-            element={
-              <ModernLayout showSidebar={false}>
-                <div className="min-h-screen flex items-center justify-center">
-                  <div className="text-center">
-                    <h1 className="text-4xl font-bold text-gray-900 mb-4">404</h1>
-                    <p className="text-gray-600 mb-4">Page not found</p>
-                    <a href="/dashboard" className="text-primary-600 hover:text-primary-700">
-                      Return to Dashboard
-                    </a>
-                  </div>
-                </div>
-              </ModernLayout>
-            } 
-          />
-                </Routes>
+                  <Suspense fallback={<PageLoadingFallback />}>
+                    <Routes>
+                      {/* Public routes */}
+                      <Route
+                        path="/login"
+                        element={
+                          <PublicRoute>
+                            <ModernAuthPage mode="login" />
+                          </PublicRoute>
+                        }
+                      />
+                      <Route
+                        path="/register"
+                        element={
+                          <PublicRoute>
+                            <ModernAuthPage mode="register" />
+                          </PublicRoute>
+                        }
+                      />
+                      
+                      {/* Protected routes */}
+                      <Route
+                        path="/dashboard"
+                        element={
+                          <ProtectedRoute>
+                            <ModernLayout>
+                              <ModernDashboard />
+                            </ModernLayout>
+                          </ProtectedRoute>
+                        }
+                      />
+                      <Route
+                        path="/sessions"
+                        element={
+                          <ProtectedRoute>
+                            <ModernLayout>
+                              <SessionsPage />
+                            </ModernLayout>
+                          </ProtectedRoute>
+                        }
+                      />
+                      <Route
+                        path="/sessions/new"
+                        element={
+                          <ProtectedRoute>
+                            <ModernLayout>
+                              <ModernNewSessionPage />
+                            </ModernLayout>
+                          </ProtectedRoute>
+                        }
+                      />
+                      <Route
+                        path="/sessions/:id"
+                        element={
+                          <ProtectedRoute>
+                            <ModernLayout>
+                              <SessionDetailPage />
+                            </ModernLayout>
+                          </ProtectedRoute>
+                        }
+                      />
+                      <Route
+                        path="/analytics"
+                        element={
+                          <ProtectedRoute>
+                            <ModernLayout>
+                              <AnalyticsPage />
+                            </ModernLayout>
+                          </ProtectedRoute>
+                        }
+                      />
+                      <Route
+                        path="/settings"
+                        element={
+                          <ProtectedRoute>
+                            <ModernLayout>
+                              <SettingsPage />
+                            </ModernLayout>
+                          </ProtectedRoute>
+                        }
+                      />
+                      
+                      {/* Landing page for non-authenticated users */}
+                      <Route
+                        path="/"
+                        element={
+                          <PublicRoute>
+                            <LandingPage />
+                          </PublicRoute>
+                        }
+                      />
+                      
+                      {/* 404 fallback */}
+                      <Route
+                        path="*"
+                        element={
+                          <ModernLayout showSidebar={false}>
+                            <div className="min-h-screen flex items-center justify-center">
+                              <div className="text-center">
+                                <h1 className="text-4xl font-bold text-gray-900 mb-4">404</h1>
+                                <p className="text-gray-600 mb-4">Page not found</p>
+                                <a href="/dashboard" className="text-primary-600 hover:text-primary-700">
+                                  Return to Dashboard
+                                </a>
+                              </div>
+                            </div>
+                          </ModernLayout>
+                        }
+                      />
+                    </Routes>
+                  </Suspense>
                 </Router>
               </ToastProvider>
             </QueryErrorBoundary>

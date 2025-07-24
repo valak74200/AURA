@@ -859,20 +859,22 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
         """
         System health check endpoint.
         
-        Returns the status of all system components and services.
+        Returns the status of all system components and services including cache.
         """
         # Get services dynamically
         storage_service = get_storage_service()
         audio_service = get_audio_service()
         gemini_service = services.get('gemini')
+        cache_service = services.get('cache')
         
         health_status = {
             "status": "healthy",
             "timestamp": datetime.utcnow().isoformat(),
             "services": {
                 "storage": "healthy" if storage_service else "unavailable",
-                "audio_processing": "healthy" if audio_service else "unavailable", 
-                "ai_services": "healthy" if gemini_service else "unavailable"
+                "audio_processing": "healthy" if audio_service else "unavailable",
+                "ai_services": "healthy" if gemini_service else "unavailable",
+                "cache": "healthy" if cache_service else "unavailable"
             },
             "version": "1.0.0",
             "environment": "development"
@@ -911,6 +913,23 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
         except Exception as e:
             logger.error(f"AI service health check failed: {e}")
             health_status["services"]["ai_services"] = "unhealthy"
+            health_status["status"] = "degraded"
+        
+        # Test cache service
+        try:
+            if cache_service:
+                # Test cache service health
+                from services.cache_service import CacheService
+                cache_wrapper = CacheService(cache_service)
+                cache_health = await cache_wrapper.health_check()
+                health_status["services"]["cache"] = cache_health["status"]
+                health_status["cache_stats"] = cache_health.get("stats", {})
+                
+                if cache_health["status"] != "healthy":
+                    health_status["status"] = "degraded"
+        except Exception as e:
+            logger.error(f"Cache service health check failed: {e}")
+            health_status["services"]["cache"] = "unhealthy"
             health_status["status"] = "degraded"
         
         # Determine overall status
@@ -1018,4 +1037,134 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             content=serialize_response_data(test_results)
         )
     
-    return router 
+    @router.get("/cache/stats")
+    async def get_cache_stats():
+        """
+        Get Redis cache statistics and performance metrics.
+        
+        Returns detailed information about cache usage, hit rates, and performance.
+        """
+        try:
+            cache_service = services.get('cache')
+            if not cache_service:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Cache service not available"
+                )
+            
+            # Get cache statistics
+            from services.cache_service import CacheService
+            cache_wrapper = CacheService(cache_service)
+            
+            # Get health check (includes stats)
+            health_check = await cache_wrapper.health_check()
+            cache_stats = await cache_wrapper.get_cache_stats()
+            
+            stats_response = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "cache_health": health_check,
+                "cache_statistics": cache_stats,
+                "service_status": "available"
+            }
+            
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=serialize_response_data(stats_response)
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to get cache stats: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to retrieve cache statistics: {str(e)}"
+            )
+    
+    @router.post("/cache/test")
+    async def test_cache_operations():
+        """
+        Test cache operations for debugging and verification.
+        
+        Performs basic cache operations to verify functionality.
+        """
+        try:
+            cache_service = services.get('cache')
+            if not cache_service:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Cache service not available"
+                )
+            
+            from services.cache_service import CacheService
+            cache_wrapper = CacheService(cache_service)
+            
+            test_key = f"test_key_{datetime.utcnow().timestamp()}"
+            test_data = {
+                "message": "Cache test data",
+                "timestamp": datetime.utcnow().isoformat(),
+                "test_id": test_key
+            }
+            
+            # Test cache operations
+            test_results = {
+                "test_key": test_key,
+                "operations": {},
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            # Test SET operation
+            set_result = await cache_wrapper.cache.set(test_key, test_data, ttl=60)
+            test_results["operations"]["set"] = {
+                "success": set_result,
+                "operation": "cache.set"
+            }
+            
+            # Test GET operation
+            get_result = await cache_wrapper.cache.get(test_key)
+            test_results["operations"]["get"] = {
+                "success": get_result == test_data,
+                "data_matches": get_result == test_data,
+                "operation": "cache.get"
+            }
+            
+            # Test EXISTS operation
+            exists_result = await cache_wrapper.cache.exists(test_key)
+            test_results["operations"]["exists"] = {
+                "success": exists_result,
+                "operation": "cache.exists"
+            }
+            
+            # Test DELETE operation
+            delete_result = await cache_wrapper.cache.delete(test_key)
+            test_results["operations"]["delete"] = {
+                "success": delete_result,
+                "operation": "cache.delete"
+            }
+            
+            # Verify deletion
+            get_after_delete = await cache_wrapper.cache.get(test_key)
+            test_results["operations"]["verify_delete"] = {
+                "success": get_after_delete is None,
+                "operation": "cache.get (after delete)"
+            }
+            
+            # Overall test result
+            all_operations_passed = all(
+                op.get("success", False) for op in test_results["operations"].values()
+            )
+            test_results["overall_result"] = "PASSED" if all_operations_passed else "FAILED"
+            
+            status_code = status.HTTP_200_OK if all_operations_passed else status.HTTP_500_INTERNAL_SERVER_ERROR
+            
+            return JSONResponse(
+                status_code=status_code,
+                content=serialize_response_data(test_results)
+            )
+            
+        except Exception as e:
+            logger.error(f"Cache test failed: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Cache test failed: {str(e)}"
+            )
+    
+    return router

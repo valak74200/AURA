@@ -2,7 +2,8 @@
 AURA Main GenAI Processors Pipeline
 
 Complete pipeline orchestrating real-time audio processing, voice analysis,
-AI feedback generation, and performance metrics with streaming optimization.
+AI feedback generation, and performance metrics with streaming optimization
+and circuit breaker resilience.
 """
 
 import asyncio
@@ -24,6 +25,12 @@ from processors.metrics_processor import MetricsProcessor
 from utils.exceptions import ProcessorException, PipelineException
 from services.audio_service import AudioService
 from utils.language_config import get_language_config, get_ui_message
+from utils.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitBreakerError,
+    circuit_breaker_registry
+)
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -39,7 +46,7 @@ class AuraPipeline(Processor):
     
     def __init__(self, session: PresentationSessionData):
         """
-        Initialize the complete AURA pipeline with multilingual support.
+        Initialize the complete AURA pipeline with multilingual support and circuit breaker resilience.
         
         Args:
             session: The presentation session configuration and state
@@ -59,6 +66,9 @@ class AuraPipeline(Processor):
         # Initialize audio service for preprocessing
         self.audio_service = AudioService()
         
+        # Initialize circuit breakers for resilience
+        self._init_circuit_breakers()
+        
         # Pipeline orchestration state
         self.processed_chunks = 0
         self.total_processing_time = 0.0
@@ -70,7 +80,8 @@ class AuraPipeline(Processor):
             "metrics_time_ms": 0.0,
             "total_pipeline_time_ms": 0.0,
             "errors_count": 0,
-            "success_rate": 1.0
+            "success_rate": 1.0,
+            "circuit_breaker_stats": {}
         }
         
         # Real-time feedback aggregation
@@ -84,12 +95,54 @@ class AuraPipeline(Processor):
             "error_retry_count": 2,
             "feedback_throttling": True,
             "metrics_calculation_interval": 3,  # Every 3 chunks
-            "quality_threshold": 0.5  # Minimum quality for processing
+            "quality_threshold": 0.5,  # Minimum quality for processing
+            "circuit_breaker_enabled": True
         }
         
         logger.info(
             f"Initialized complete AURA pipeline for session {self.session_id} with config: {self.config}"
         )
+    
+    def _init_circuit_breakers(self):
+        """Initialize circuit breakers for each processor with appropriate configurations."""
+        # Circuit breaker configuration for different processors
+        analysis_config = CircuitBreakerConfig(
+            failure_threshold=3,
+            recovery_timeout=30,
+            success_threshold=2,
+            timeout=3.0,
+            expected_exception=(ProcessorException, asyncio.TimeoutError, Exception)
+        )
+        
+        feedback_config = CircuitBreakerConfig(
+            failure_threshold=5,
+            recovery_timeout=45,
+            success_threshold=3,
+            timeout=4.0,
+            expected_exception=(ProcessorException, asyncio.TimeoutError, Exception)
+        )
+        
+        metrics_config = CircuitBreakerConfig(
+            failure_threshold=4,
+            recovery_timeout=60,
+            success_threshold=2,
+            timeout=2.0,
+            expected_exception=(ProcessorException, asyncio.TimeoutError, Exception)
+        )
+        
+        # Create circuit breakers for each processor
+        session_prefix = f"session_{self.session_id}"
+        self.analysis_circuit_breaker = circuit_breaker_registry.get_or_create(
+            f"{session_prefix}_analysis", analysis_config
+        )
+        self.feedback_circuit_breaker = circuit_breaker_registry.get_or_create(
+            f"{session_prefix}_feedback", feedback_config
+        )
+        self.metrics_circuit_breaker = circuit_breaker_registry.get_or_create(
+            f"{session_prefix}_metrics", metrics_config
+        )
+        
+        logger.info(f"Circuit breakers initialized for session {self.session_id}")
     
     async def call(self, input_stream: AsyncIterator[ProcessorPart]) -> AsyncIterator[ProcessorPart]:
         """
@@ -348,29 +401,67 @@ class AuraPipeline(Processor):
         return results
     
     async def _run_processor_safely(self, processor: Processor, input_part: ProcessorPart, processor_name: str) -> Optional[Dict[str, Any]]:
-        """Run a processor with error handling and timeout."""
+        """Run a processor with circuit breaker protection, error handling and timeout."""
+        # Get appropriate circuit breaker
+        circuit_breaker = self._get_circuit_breaker_for_processor(processor_name)
+        
+        if not self.pipeline_config.get("circuit_breaker_enabled", True) or not circuit_breaker:
+            # Fallback to original implementation if circuit breakers disabled
+            return await self._run_processor_without_circuit_breaker(processor, input_part, processor_name)
+        
+        try:
+            # Run processor through circuit breaker
+            result = await circuit_breaker.call(
+                self._execute_processor, processor, input_part, processor_name
+            )
+            return result
+            
+        except CircuitBreakerError as e:
+            logger.warning(f"Circuit breaker open for {processor_name}: {e}")
+            return await self._get_circuit_breaker_fallback(processor_name, input_part)
+            
+        except Exception as e:
+            logger.error(f"{processor_name} processor error: {e}")
+            return {"error": str(e), "fallback_available": True}
+    
+    def _get_circuit_breaker_for_processor(self, processor_name: str) -> Optional[CircuitBreaker]:
+        """Get the appropriate circuit breaker for a processor."""
+        if processor_name == "analysis":
+            return self.analysis_circuit_breaker
+        elif processor_name == "feedback":
+            return self.feedback_circuit_breaker
+        elif processor_name == "metrics":
+            return self.metrics_circuit_breaker
+        return None
+    
+    async def _execute_processor(self, processor: Processor, input_part: ProcessorPart, processor_name: str) -> Optional[Dict[str, Any]]:
+        """Execute processor with timeout - used by circuit breaker."""
+        results = []
+        async for result_part in processor.process(streams.stream_content([input_part])):
+            # Parse JSON result from processor
+            if hasattr(result_part, 'text') and result_part.text:
+                try:
+                    parsed_result = json.loads(result_part.text)
+                    results.append(parsed_result)
+                except json.JSONDecodeError:
+                    # If not JSON, use as string
+                    results.append(result_part.text)
+            else:
+                # Fallback to string representation
+                results.append(str(result_part))
+        
+        # Return the first (and typically only) result
+        return results[0] if results else None
+    
+    async def _run_processor_without_circuit_breaker(self, processor: Processor, input_part: ProcessorPart, processor_name: str) -> Optional[Dict[str, Any]]:
+        """Original processor execution without circuit breaker (fallback)."""
         try:
             # Create timeout for processor
             timeout = self.pipeline_config["chunk_timeout_seconds"]
             
             # Run processor with timeout
             async with asyncio.timeout(timeout):
-                results = []
-                async for result_part in processor.process(streams.stream_content([input_part])):
-                    # Parse JSON result from processor
-                    if hasattr(result_part, 'text') and result_part.text:
-                        try:
-                            parsed_result = json.loads(result_part.text)
-                            results.append(parsed_result)
-                        except json.JSONDecodeError:
-                            # If not JSON, use as string
-                            results.append(result_part.text)
-                    else:
-                        # Fallback to string representation
-                        results.append(str(result_part))
-                
-                # Return the first (and typically only) result
-                return results[0] if results else None
+                return await self._execute_processor(processor, input_part, processor_name)
                 
         except asyncio.TimeoutError:
             logger.warning(f"{processor_name} processor timeout")
@@ -378,6 +469,49 @@ class AuraPipeline(Processor):
         except Exception as e:
             logger.error(f"{processor_name} processor error: {e}")
             return {"error": str(e)}
+    
+    async def _get_circuit_breaker_fallback(self, processor_name: str, input_part: ProcessorPart) -> Dict[str, Any]:
+        """Get fallback response when circuit breaker is open."""
+        fallback_data = {
+            "circuit_breaker_open": True,
+            "processor": processor_name,
+            "timestamp": datetime.utcnow().isoformat(),
+            "fallback_response": True
+        }
+        
+        if processor_name == "analysis":
+            fallback_data.update({
+                "voice_analysis": {
+                    "quality_assessment": {"overall_quality": 0.5},
+                    "realtime_insights": [
+                        get_ui_message("analysis_unavailable", self.language, "Voice analysis temporarily unavailable")
+                    ],
+                    "fallback_mode": True
+                }
+            })
+        elif processor_name == "feedback":
+            fallback_data.update({
+                "ai_generated_feedback": {
+                    "encouragement": get_ui_message("keep_going", self.language, "Keep going, you're doing well!"),
+                    "immediate_tips": [
+                        get_ui_message("continue_practicing", self.language, "Continue practicing while we restore feedback")
+                    ],
+                    "fallback_mode": True
+                }
+            })
+        elif processor_name == "metrics":
+            fallback_data.update({
+                "performance_insights": {
+                    "current_status": {"quality_score": 0.5},
+                    "fallback_mode": True
+                },
+                "session_summary": {
+                    "session_duration_seconds": (datetime.utcnow() - self.start_time).total_seconds(),
+                    "chunks_processed": self.processed_chunks
+                }
+            })
+        
+        return fallback_data
     
     async def _aggregate_and_yield_results(self, results: Dict[str, Any], original_audio_part: ProcessorPart) -> AsyncIterator[ProcessorPart]:
         """Aggregate results from all processors and yield comprehensive coaching data."""
@@ -811,14 +945,26 @@ class AuraPipeline(Processor):
         )
     
     async def get_session_summary(self) -> Dict[str, Any]:
-        """Generate comprehensive session summary."""
+        """Generate comprehensive session summary with circuit breaker statistics."""
         session_duration = (datetime.utcnow() - self.start_time).total_seconds()
+        
+        # Get circuit breaker statistics
+        circuit_breaker_stats = {}
+        if hasattr(self, 'analysis_circuit_breaker'):
+            circuit_breaker_stats['analysis'] = self.analysis_circuit_breaker.get_stats()
+        if hasattr(self, 'feedback_circuit_breaker'):
+            circuit_breaker_stats['feedback'] = self.feedback_circuit_breaker.get_stats()
+        if hasattr(self, 'metrics_circuit_breaker'):
+            circuit_breaker_stats['metrics'] = self.metrics_circuit_breaker.get_stats()
         
         return {
             "session_id": str(self.session_id),
             "session_duration_seconds": session_duration,
             "chunks_processed": self.processed_chunks,
-            "pipeline_stats": self.pipeline_stats.copy(),
+            "pipeline_stats": {
+                **self.pipeline_stats,
+                "circuit_breaker_stats": circuit_breaker_stats
+            },
             "processing_efficiency": self._calculate_processing_efficiency(),
             "average_chunk_time_ms": (
                 self.pipeline_stats["total_pipeline_time_ms"] / max(self.processed_chunks, 1)
@@ -829,8 +975,50 @@ class AuraPipeline(Processor):
             ),
             "pipeline_configuration": self.pipeline_config.copy(),
             "processors_used": ["AnalysisProcessor", "FeedbackProcessor", "MetricsProcessor"],
+            "resilience_features": {
+                "circuit_breakers_enabled": self.pipeline_config.get("circuit_breaker_enabled", True),
+                "circuit_breaker_summary": self._get_circuit_breaker_summary(circuit_breaker_stats)
+            },
             "session_end_timestamp": datetime.utcnow().isoformat()
         }
+    
+    def _get_circuit_breaker_summary(self, circuit_breaker_stats: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate summary of circuit breaker performance."""
+        summary = {
+            "total_circuit_breakers": len(circuit_breaker_stats),
+            "open_circuits": 0,
+            "half_open_circuits": 0,
+            "closed_circuits": 0,
+            "total_protected_calls": 0,
+            "total_circuit_open_calls": 0,
+            "overall_success_rate": 0.0
+        }
+        
+        if not circuit_breaker_stats:
+            return summary
+        
+        total_calls = 0
+        total_successes = 0
+        
+        for processor_name, stats in circuit_breaker_stats.items():
+            state = stats.get("state", "closed")
+            if state == "open":
+                summary["open_circuits"] += 1
+            elif state == "half_open":
+                summary["half_open_circuits"] += 1
+            else:
+                summary["closed_circuits"] += 1
+            
+            summary["total_protected_calls"] += stats.get("total_calls", 0)
+            summary["total_circuit_open_calls"] += stats.get("total_circuit_open_calls", 0)
+            
+            total_calls += stats.get("total_calls", 0)
+            total_successes += stats.get("total_successes", 0)
+        
+        if total_calls > 0:
+            summary["overall_success_rate"] = (total_successes / total_calls) * 100
+        
+        return summary
 
 
 class FeedbackAggregator:

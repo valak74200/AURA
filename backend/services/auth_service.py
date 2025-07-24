@@ -34,13 +34,39 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 class AuthService:
-    """Service d'authentification"""
+    """Service d'authentification avec cache Redis"""
     
-    def __init__(self):
+    def __init__(self, cache_service=None):
         self.pwd_context = pwd_context
         self.secret_key = settings.secret_key
         self.algorithm = ALGORITHM
         self.access_token_expire_minutes = settings.access_token_expire_minutes
+        self.cache_service = cache_service
+    
+    async def initialize(self):
+        """Initialize auth service."""
+        if not self.cache_service:
+            # Get cache service from DI container
+            try:
+                from utils.service_container import get_current_container
+                from services.service_interfaces import ICacheService
+                from services.cache_service import CacheService
+                
+                container = get_current_container()
+                if container:
+                    cache_backend = await container.get_service(ICacheService)
+                    self.cache_service = CacheService(cache_backend)
+                    await self.cache_service.initialize()
+                    logger.info("AuthService initialized with cache support")
+                else:
+                    logger.warning("AuthService initialized without cache (no DI container)")
+            except Exception as e:
+                logger.warning(f"AuthService cache initialization failed: {e}")
+    
+    async def cleanup(self):
+        """Cleanup auth service."""
+        if self.cache_service:
+            await self.cache_service.cleanup()
     
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """Vérifier un mot de passe"""
@@ -93,14 +119,39 @@ class AuthService:
         return result.scalar_one_or_none()
     
     async def get_user_by_id(self, db: AsyncSession, user_id: Union[str, uuid.UUID]) -> Optional[User]:
-        """Récupérer un utilisateur par ID"""
+        """Récupérer un utilisateur par ID avec cache"""
         if isinstance(user_id, str):
             user_id = uuid.UUID(user_id)
         
+        user_id_str = str(user_id)
+        
+        # Try cache first
+        if self.cache_service:
+            try:
+                cached_user_data = await self.cache_service.get_user_data(user_id_str)
+                if cached_user_data:
+                    logger.debug(f"Cache hit for user {user_id_str}")
+                    # Convert cached data back to User object
+                    return self._dict_to_user(cached_user_data)
+            except Exception as e:
+                logger.warning(f"Cache get failed for user {user_id_str}: {e}")
+        
+        # Cache miss or no cache - query database
         result = await db.execute(
             select(User).where(User.id == user_id)
         )
-        return result.scalar_one_or_none()
+        user = result.scalar_one_or_none()
+        
+        # Cache the result
+        if user and self.cache_service:
+            try:
+                user_data = self._user_to_dict(user)
+                await self.cache_service.cache_user_data(user_id_str, user_data, ttl=settings.cache_default_ttl)
+                logger.debug(f"Cached user data for {user_id_str}")
+            except Exception as e:
+                logger.warning(f"Cache set failed for user {user_id_str}: {e}")
+        
+        return user
     
     async def authenticate_user(self, db: AsyncSession, email_or_username: str, password: str) -> Optional[User]:
         """Authentifier un utilisateur"""
@@ -199,6 +250,58 @@ class AuthService:
             expires_in=self.access_token_expire_minutes * 60,
             user=UserResponse.from_orm(user)
         )
+    
+    def _user_to_dict(self, user: User) -> dict:
+        """Convert User object to dictionary for caching."""
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "username": user.username,
+            "hashed_password": user.hashed_password,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "language": user.language,
+            "is_active": user.is_active,
+            "is_verified": user.is_verified,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+            "last_login": user.last_login.isoformat() if user.last_login else None,
+        }
+    
+    def _dict_to_user(self, user_data: dict) -> User:
+        """Convert dictionary back to User object."""
+        from datetime import datetime
+        
+        user = User()
+        user.id = uuid.UUID(user_data["id"])
+        user.email = user_data["email"]
+        user.username = user_data["username"]
+        user.hashed_password = user_data["hashed_password"]
+        user.first_name = user_data["first_name"]
+        user.last_name = user_data["last_name"]
+        user.language = user_data["language"]
+        user.is_active = user_data["is_active"]
+        user.is_verified = user_data["is_verified"]
+        
+        # Convert ISO strings back to datetime objects
+        if user_data.get("created_at"):
+            user.created_at = datetime.fromisoformat(user_data["created_at"])
+        if user_data.get("updated_at"):
+            user.updated_at = datetime.fromisoformat(user_data["updated_at"])
+        if user_data.get("last_login"):
+            user.last_login = datetime.fromisoformat(user_data["last_login"])
+        
+        return user
+    
+    async def invalidate_user_cache(self, user_id: Union[str, uuid.UUID]):
+        """Invalidate user cache when user data changes."""
+        if self.cache_service:
+            try:
+                user_id_str = str(user_id)
+                await self.cache_service.invalidate_user_cache(user_id_str)
+                logger.debug(f"Invalidated cache for user {user_id_str}")
+            except Exception as e:
+                logger.warning(f"Cache invalidation failed for user {user_id}: {e}")
 
 # Instance globale du service
 auth_service = AuthService()
