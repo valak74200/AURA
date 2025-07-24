@@ -122,10 +122,27 @@ class AuraPipeline(Processor):
                     # Generate unique chunk ID for tracking
                     chunk_id = f"{self.session_id}_{self.processed_chunks}_{int(datetime.utcnow().timestamp())}"
                     
+                    # Determine data source and type
+                    audio_data = None
+                    data_type = audio_part.metadata.get("type", "unknown")
+                    mimetype = "audio/wav"
+                    
+                    if hasattr(audio_part, 'text') and audio_part.text:
+                        # JSON analysis data
+                        audio_data = audio_part.text
+                        mimetype = "application/json"
+                    elif hasattr(audio_part, 'part') and audio_part.part:
+                        # Raw audio data
+                        audio_data = audio_part.part
+                        mimetype = "audio/wav"
+                    else:
+                        logger.warning(f"No data found in ProcessorPart for chunk {chunk_id}")
+                        continue
+                    
                     # Enhance audio part metadata
                     enhanced_audio_part = ProcessorPart(
-                        audio_part.part,  # Use .part for raw audio data
-                        mimetype="audio/wav", # Assuming audio is in WAV format
+                        audio_data,
+                        mimetype=mimetype,
                         metadata={
                             **audio_part.metadata,
                             "chunk_id": chunk_id,
@@ -133,7 +150,7 @@ class AuraPipeline(Processor):
                             "chunk_number": self.processed_chunks,
                             "pipeline_timestamp": datetime.utcnow().isoformat(),
                             "processing_priority": self._calculate_processing_priority(audio_part),
-                            "type": "audio_chunk"  # Move type to metadata
+                            "type": data_type  # Preserve original type
                         }
                     )
                     
@@ -196,7 +213,14 @@ class AuraPipeline(Processor):
         if audio_part.metadata.get("type") not in ["audio_chunk", "audio"]:
             return False
         
-        if audio_part.part is None:  # Check .part for raw data
+        # Check if we have data in any form (binary data, text data, or JSON)
+        has_data = (
+            (hasattr(audio_part, 'part') and audio_part.part is not None) or
+            (hasattr(audio_part, 'text') and audio_part.text is not None) or
+            (hasattr(audio_part, 'data') and audio_part.data is not None)
+        )
+        
+        if not has_data:
             return False
         
         return True
@@ -333,7 +357,17 @@ class AuraPipeline(Processor):
             async with asyncio.timeout(timeout):
                 results = []
                 async for result_part in processor.process(streams.stream_content([input_part])):
-                    results.append(result_part.text)
+                    # Parse JSON result from processor
+                    if hasattr(result_part, 'text') and result_part.text:
+                        try:
+                            parsed_result = json.loads(result_part.text)
+                            results.append(parsed_result)
+                        except json.JSONDecodeError:
+                            # If not JSON, use as string
+                            results.append(result_part.text)
+                    else:
+                        # Fallback to string representation
+                        results.append(str(result_part))
                 
                 # Return the first (and typically only) result
                 return results[0] if results else None

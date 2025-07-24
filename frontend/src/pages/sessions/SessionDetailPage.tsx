@@ -239,7 +239,8 @@ const SessionDetailPage: React.FC = () => {
     audioLevel,
     setAudioLevel,
     realtimeFeedback,
-    coachingResults
+    coachingResults,
+    sendAudioChunk  // Add this to get the function reference
   } = useSessionStore();
 
   // API hooks
@@ -407,44 +408,25 @@ const SessionDetailPage: React.FC = () => {
           
           // Handle messages from AudioWorklet
           realtimeProcessor.port.onmessage = (event) => {
-            if (event.data.type === 'audioData') {
-              // Send for real-time analysis with throttling
-              if (id && Math.random() < 0.1) { // ~10% chance for better real-time feedback
-                console.log('Sending real-time audio chunk for analysis:', {
+            if (event.data.type === 'audioData' && isConnected) {
+              // Send audio chunk via WebSocket for real-time processing
+              if (id && Math.random() < 0.3) { // ~30% chance for better real-time feedback
+                console.log('Sending real-time audio chunk via WebSocket:', {
                   sessionId: id,
                   arrayLength: event.data.audioArray.length,
                   sampleRate: event.data.sampleRate,
                   duration: event.data.duration
                 });
                 
-                analyzeChunkMutation.mutate({
-                  sessionId: id,
-                  audioData: {
-                    audio_array: event.data.audioArray,
-                    sample_rate: event.data.sampleRate,
-                    duration: event.data.duration
-                  }
-                }, {
-                  onSuccess: (data) => {
-                    console.log('Real-time analysis successful:', data);
-                    
-                    // Debug: Show what data we're getting from real-time analysis
-                    if (data?.analysis_results?.length > 0) {
-                      const analysisData = data.analysis_results[0];
-                      if (analysisData.data) {
-                        try {
-                          const parsedData = JSON.parse(analysisData.data);
-                          console.log('Parsed analysis data:', parsedData);
-                        } catch (e) {
-                          console.log('Raw analysis data:', analysisData.data);
-                        }
-                      }
-                    }
-                  },
-                  onError: (error) => {
-                    console.error('Real-time analysis failed:', error);
-                  }
-                });
+                // Convert audio array to base64 for WebSocket transmission
+                const audioBytes = new Uint8Array(event.data.audioArray);
+                const base64Audio = btoa(String.fromCharCode.apply(null, Array.from(audioBytes)));
+                
+                // Send via WebSocket using the service
+                const success = sendAudioChunk(base64Audio, event.data.sampleRate);
+                if (!success) {
+                  console.warn('Failed to send audio chunk via WebSocket');
+                }
               }
             }
           };
@@ -467,16 +449,25 @@ const SessionDetailPage: React.FC = () => {
               audioArray[i] = Math.max(0, Math.min(255, Math.round((inputData[i] + 1) * 127.5)));
             }
             
-            // Send for real-time analysis with throttling
-            if (id && Math.random() < 0.01) {
-              analyzeChunkMutation.mutate({
+            // Send for real-time analysis via WebSocket with throttling
+            if (id && isConnected && Math.random() < 0.1) {
+              console.log('Sending real-time audio chunk via WebSocket (fallback):', {
                 sessionId: id,
-                audioData: {
-                  audio_array: Array.from(audioArray),
-                  sample_rate: audioContextRef.current?.sampleRate || 16000,
-                  duration: inputData.length / (audioContextRef.current?.sampleRate || 16000)
-                }
+                arrayLength: audioArray.length,
+                sampleRate: audioContextRef.current?.sampleRate || 16000,
+                duration: inputData.length / (audioContextRef.current?.sampleRate || 16000)
               });
+              
+              // Convert to base64 for WebSocket transmission
+              const base64Audio = btoa(String.fromCharCode.apply(null, Array.from(audioArray)));
+              
+              const success = sendAudioChunk(
+                base64Audio, 
+                audioContextRef.current?.sampleRate || 16000
+              );
+              if (!success) {
+                console.warn('Failed to send audio chunk via WebSocket (fallback)');
+              }
             }
           };
           
@@ -578,13 +569,13 @@ const SessionDetailPage: React.FC = () => {
               converted: audioFile.type === 'audio/wav' && audioBlob.type !== 'audio/wav'
             });
             
-            // Try uploading without immediate processing first to test file upload
+            // Upload with immediate processing and feedback generation
             const result = await uploadAudioMutation.mutateAsync({
               sessionId: id,
               file: audioFile,
               options: {
-                processImmediately: false, // Disable immediate processing to test upload
-                generateFeedback: false    // Disable feedback generation for now
+                processImmediately: true,  // Enable immediate processing
+                generateFeedback: true     // Enable AI feedback generation
               }
             });
             
@@ -674,6 +665,30 @@ const SessionDetailPage: React.FC = () => {
         
         playbackAudio.onended = () => setIsPlaying(false);
       }
+    }
+  };
+
+  const saveSession = async () => {
+    if (!id) return;
+    
+    try {
+      // Marquer la session comme complétée
+      await updateSessionMutation.mutateAsync({
+        id,
+        updates: {
+          status: 'completed',
+          ended_at: new Date().toISOString()
+        }
+      });
+      
+      // Afficher un message de succès
+      alert('Session sauvegardée avec succès !');
+      
+      // Rediriger vers la liste des sessions
+      navigate('/sessions');
+    } catch (error) {
+      console.error('Erreur lors de la sauvegarde:', error);
+      alert('Erreur lors de la sauvegarde de la session');
     }
   };
 
@@ -898,17 +913,29 @@ const SessionDetailPage: React.FC = () => {
                 )}
 
                 {playbackAudio && (
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    onClick={togglePlayback}
-                    className="h-12 w-12 rounded-full p-0"
-                  >
-                    {isPlaying ? 
-                      <Pause className="w-5 h-5" /> : 
-                      <Play className="w-5 h-5" />
-                    }
-                  </Button>
+                  <>
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      onClick={togglePlayback}
+                      className="h-12 w-12 rounded-full p-0"
+                    >
+                      {isPlaying ? 
+                        <Pause className="w-5 h-5" /> : 
+                        <Play className="w-5 h-5" />
+                      }
+                    </Button>
+                    
+                    <Button
+                      variant="success"
+                      size="lg"
+                      onClick={saveSession}
+                      disabled={updateSessionMutation.isPending}
+                      className="px-6 py-2"
+                    >
+                      {updateSessionMutation.isPending ? 'Sauvegarde...' : '✓ Valider l\'enregistrement'}
+                    </Button>
+                  </>
                 )}
               </div>
 
@@ -917,7 +944,7 @@ const SessionDetailPage: React.FC = () => {
                   {isRecording 
                     ? 'Enregistrement en cours... Cliquez sur stop pour terminer.'
                     : audioChunks.length > 0
-                    ? 'Enregistrement terminé. Vous pouvez l\'écouter ou commencer un nouvel enregistrement.'
+                    ? 'Enregistrement terminé. Vous pouvez l\'écouter et cliquer sur "Valider l\'enregistrement" pour sauvegarder.'
                     : session.status === 'completed'
                     ? 'Cette session a été complétée.'
                     : 'Cliquez sur le microphone pour commencer l\'enregistrement.'

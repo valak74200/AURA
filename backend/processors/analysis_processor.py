@@ -6,6 +6,7 @@ pitch analysis, and speech pattern detection using advanced audio processing.
 """
 
 import asyncio
+import json
 from datetime import datetime
 from typing import AsyncIterator, Dict, Any, List, Optional
 import numpy as np
@@ -90,12 +91,48 @@ class AnalysisProcessor(Processor):
                     )
                     continue
                 
-                # Extract audio data
+                # Extract audio data or check for pre-analyzed data
                 audio_data = self._extract_audio_data(audio_part)
+                
+                # Check if we have pre-analyzed data instead of raw audio
                 if audio_data is None:
+                    # This might be pre-analyzed data, try to extract it
+                    if hasattr(audio_part, 'text') and audio_part.text:
+                        try:
+                            import json
+                            analysis_results = json.loads(audio_part.text)
+                            if isinstance(analysis_results, dict) and 'chunk_metrics' in analysis_results:
+                                logger.info("Using pre-analyzed voice data", extra={"analysis_keys": list(analysis_results.keys())})
+                                
+                                # Update cumulative metrics
+                                self._update_cumulative_metrics(analysis_results)
+                                
+                                # Create analysis result part
+                                analysis_part = ProcessorPart(
+                                    json.dumps(analysis_results) if isinstance(analysis_results, dict) else str(analysis_results),
+                                    mimetype="application/json",
+                                    metadata={
+                                        **audio_part.metadata,
+                                        "type": "voice_analysis",
+                                        "processor": self.__class__.__name__,
+                                        "analysis_timestamp": datetime.utcnow().isoformat(),
+                                        "processing_time_ms": (datetime.utcnow() - start_time).total_seconds() * 1000,
+                                        "chunk_number": self.processed_chunks,
+                                        "pre_analyzed": True
+                                    }
+                                )
+                                
+                                self.processed_chunks += 1
+                                yield analysis_part
+                                continue
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+                    
+                    # No valid audio data or pre-analyzed data found
+                    logger.debug("No valid audio data found, skipping")
                     continue
                 
-                # Perform voice analysis
+                # Perform voice analysis on raw audio data
                 try:
                     analysis_results = await self._analyze_voice_chunk(audio_data, audio_part.metadata)
                     
@@ -598,34 +635,86 @@ class AnalysisProcessor(Processor):
         if audio_part.metadata.get("type") != "audio_chunk":
             return False
         
-        if audio_part.part is None:  # Check .part for raw audio data
+        # Check if audio part has data in any form
+        has_data = (
+            (hasattr(audio_part, 'data') and audio_part.data is not None) or
+            (hasattr(audio_part, 'part') and audio_part.part is not None) or
+            (hasattr(audio_part, 'text') and audio_part.text is not None)
+        )
+        
+        if not has_data:
             return False
         
         return True
     
     def _extract_audio_data(self, audio_part: ProcessorPart) -> Optional[np.ndarray]:
-        """Extract numpy audio data from ProcessorPart."""
+        """Extract numpy audio data from ProcessorPart (compatible with Google GenAI Processors)."""
         try:
-            # For audio data, use .part to get the raw data
-            audio_data = audio_part.part
+            # For Google GenAI Processors, we need to handle google.genai.types.Part
+            # Check if this is a voice analysis result (JSON data) rather than raw audio
+            if hasattr(audio_part, 'text') and audio_part.text:
+                try:
+                    import json
+                    # Try to parse as JSON - this might be voice analysis results
+                    analysis_data = json.loads(audio_part.text)
+                    if isinstance(analysis_data, dict) and 'chunk_metrics' in analysis_data:
+                        # This is already analyzed data, not raw audio
+                        # We can work with the metrics directly
+                        logger.info("Received pre-analyzed voice data, using existing metrics")
+                        return None  # Signal that we have analysis data, not raw audio
+                except json.JSONDecodeError:
+                    # Not JSON, might be raw audio data as text
+                    pass
+            
+            # Try to access audio data from different sources
+            audio_data = None
+            
+            # For GenAI ProcessorPart, try different access methods
+            if hasattr(audio_part, 'data') and audio_part.data is not None:
+                audio_data = audio_part.data
+            elif hasattr(audio_part, 'text') and audio_part.text is not None:
+                audio_data = audio_part.text
+            elif hasattr(audio_part, 'part') and audio_part.part is not None:
+                # This might be the google.genai.types.Part
+                genai_part = audio_part.part
+                if hasattr(genai_part, 'data') and genai_part.data is not None:
+                    audio_data = genai_part.data
+                elif hasattr(genai_part, 'text') and genai_part.text is not None:
+                    audio_data = genai_part.text
+                else:
+                    logger.warning(f"GenAI Part type not supported: {type(genai_part)}")
+                    return None
+            else:
+                logger.warning("No accessible data found in ProcessorPart")
+                return None
             
             # Handle different data formats
             if isinstance(audio_data, np.ndarray):
                 return audio_data
             elif isinstance(audio_data, (list, tuple)):
                 return np.array(audio_data, dtype=np.float32)
+            elif isinstance(audio_data, bytes):
+                # Convert bytes to numpy array (assuming they are uint8 audio samples)
+                try:
+                    # Convert bytes to float32 array normalized to [-1, 1]
+                    audio_array = np.frombuffer(audio_data, dtype=np.uint8)
+                    return (audio_array.astype(np.float32) - 127.5) / 127.5
+                except Exception as e:
+                    logger.warning(f"Failed to convert bytes to audio array: {e}")
+                    return None
             elif isinstance(audio_data, str):
-                # If it's a base64 string, decode it
+                # If it's a base64 string, try to decode it
                 try:
                     import base64
                     audio_bytes = base64.b64decode(audio_data)
-                    # Convert bytes to numpy array (this is simplified)
-                    return np.frombuffer(audio_bytes, dtype=np.float32)
-                except Exception:
-                    logger.warning("Failed to decode base64 audio data")
+                    # Convert bytes to numpy array
+                    audio_array = np.frombuffer(audio_bytes, dtype=np.uint8)
+                    return (audio_array.astype(np.float32) - 127.5) / 127.5
+                except Exception as e:
+                    logger.warning(f"Failed to decode base64 audio data: {e}")
                     return None
             else:
-                logger.warning(f"Unsupported audio data type: {type(audio_data)}")
+                logger.debug(f"Unsupported audio data type: {type(audio_data)}")
                 return None
                 
         except Exception as e:

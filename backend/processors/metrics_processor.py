@@ -6,6 +6,7 @@ performance metrics throughout presentation coaching sessions.
 """
 
 import asyncio
+import json
 from datetime import datetime, timedelta
 from typing import AsyncIterator, Dict, Any, List, Optional, Tuple
 from collections import deque
@@ -210,6 +211,15 @@ class MetricsProcessor(Processor):
     async def _process_voice_metrics(self, analysis_part: ProcessorPart) -> Dict[str, Any]:
         """Process voice analysis data to calculate performance metrics."""
         analysis_data = analysis_part.text
+        
+        # Parse analysis_data if it's a JSON string
+        if isinstance(analysis_data, str):
+            try:
+                analysis_data = json.loads(analysis_data)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse analysis_data as JSON in MetricsProcessor: {analysis_data}")
+                analysis_data = {}
+        
         chunk_metrics = analysis_data.get("chunk_metrics", {})
         advanced_metrics = analysis_data.get("advanced_metrics", {})
         quality_assessment = analysis_data.get("quality_assessment", {})

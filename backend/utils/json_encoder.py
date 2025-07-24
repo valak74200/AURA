@@ -55,7 +55,7 @@ class AuraJSONEncoder(json.JSONEncoder):
             return float(obj)
         if isinstance(obj, np.ndarray):
             return obj.tolist()
-        if isinstance(obj, (np.bool_, np.bool8)):
+        if isinstance(obj, np.bool_):
             return bool(obj)
         
         # Handle Decimal
@@ -115,7 +115,7 @@ def serialize_response_data(data: Union[Dict, List, Any]) -> Union[Dict, List, A
         return float(data)
     elif isinstance(data, np.ndarray):
         return data.tolist()
-    elif isinstance(data, (np.bool_, np.bool8)):
+    elif isinstance(data, np.bool_):
         return bool(data)
     elif isinstance(data, Decimal):
         return float(data)

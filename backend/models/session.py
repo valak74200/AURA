@@ -301,6 +301,17 @@ class PresentationSessionResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
+class SessionsResponse(BaseModel):
+    """Response model for paginated sessions list."""
+    data: List[PresentationSessionResponse]
+    total: int
+    page: int
+    limit: int
+    
+    class Config:
+        from_attributes = True
+
 # ============================================================================
 # MODÈLES SQLALCHEMY (BASE DE DONNÉES)
 # ============================================================================

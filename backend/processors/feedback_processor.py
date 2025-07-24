@@ -95,7 +95,10 @@ class FeedbackProcessor(Processor):
                 # Extract analysis data
                 analysis_data = analysis_part.text
                 if not analysis_data:
+                    logger.debug("No analysis data found in part")
                     continue
+                
+                logger.debug(f"FeedbackProcessor received analysis data of type: {type(analysis_data)}")
                 
                 try:
                     # Generate feedback based on analysis
@@ -138,13 +141,15 @@ class FeedbackProcessor(Processor):
                     )
                     
                     # Yield error part with fallback feedback
+                    error_data = {
+                        "error": str(e),
+                        "fallback_feedback": self._generate_fallback_feedback(analysis_data)
+                    }
                     error_part = ProcessorPart(
-                        data={
-                            "error": str(e),
-                            "fallback_feedback": self._generate_fallback_feedback(analysis_data)
-                        },
-                        type="feedback_error",
+                        json.dumps(error_data),
+                        mimetype="application/json",
                         metadata={
+                            "type": "feedback_error",
                             **analysis_part.metadata,
                             "processor": self.__class__.__name__,
                             "error_timestamp": datetime.utcnow().isoformat()
@@ -171,6 +176,14 @@ class FeedbackProcessor(Processor):
         Returns:
             Dict containing generated feedback and insights
         """
+        # Parse analysis_data if it's a JSON string
+        if isinstance(analysis_data, str):
+            try:
+                analysis_data = json.loads(analysis_data)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse analysis_data as JSON: {analysis_data}")
+                analysis_data = {}
+        
         # Extract key metrics for feedback generation
         chunk_metrics = analysis_data.get("chunk_metrics", {})
         advanced_metrics = analysis_data.get("advanced_metrics", {})
@@ -603,6 +616,14 @@ Réponds UNIQUEMENT avec le JSON, sans texte additionnel."""
         """Update session context with new analysis and feedback."""
         self.session_context["total_feedback_generated"] += 1
         
+        # Parse analysis_data if it's a JSON string
+        if isinstance(analysis_data, str):
+            try:
+                analysis_data = json.loads(analysis_data)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse analysis_data as JSON in _update_session_context: {analysis_data}")
+                analysis_data = {}
+        
         # Track quality progression
         quality_score = analysis_data.get("quality_assessment", {}).get("overall_quality", 0.0)
         self.session_context["session_progression"].append(quality_score)
@@ -643,6 +664,14 @@ Réponds UNIQUEMENT avec le JSON, sans texte additionnel."""
     
     def _generate_fallback_feedback(self, analysis_data: Dict[str, Any]) -> Dict[str, Any]:
         """Generate fallback feedback when AI generation fails."""
+        # Parse analysis_data if it's a JSON string
+        if isinstance(analysis_data, str):
+            try:
+                analysis_data = json.loads(analysis_data)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse analysis_data as JSON in fallback: {analysis_data}")
+                analysis_data = {}
+        
         chunk_metrics = analysis_data.get("chunk_metrics", {})
         
         fallback_suggestions = []

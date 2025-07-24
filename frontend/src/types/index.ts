@@ -149,10 +149,12 @@ export interface MultilangualMetrics {
 }
 
 export interface WebSocketMessage {
-  type: 'audio_chunk' | 'coaching_result' | 'realtime_feedback' | 'milestone_achieved' | 'error';
+  type: 'audio_chunk' | 'coaching_result' | 'realtime_feedback' | 'milestone_achieved' | 'error' | 'coaching_feedback' | 'realtime_suggestion' | 'performance_metrics' | 'session_initialized' | 'audio_processing_error' | 'analysis_result';
   data?: any;
   session_id?: string;
   timestamp?: string;
+  message?: string;
+  error?: string;
 }
 
 export interface AudioChunkMessage {

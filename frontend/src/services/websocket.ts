@@ -135,14 +135,20 @@ class WebSocketService {
   send(message: WebSocketMessage): boolean {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
-        this.ws.send(JSON.stringify(message));
+        const messageStr = JSON.stringify(message);
+        console.log('Sending WebSocket message:', {
+          type: message.type,
+          messageLength: messageStr.length,
+          websocketState: this.ws.readyState
+        });
+        this.ws.send(messageStr);
         return true;
       } catch (error) {
         console.error('Failed to send WebSocket message:', error);
         return false;
       }
     }
-    console.warn('WebSocket is not connected');
+    console.warn('WebSocket is not connected, state:', this.ws?.readyState);
     return false;
   }
 
@@ -153,7 +159,19 @@ class WebSocketService {
       sample_rate: sampleRate,
       timestamp: new Date().toISOString(),
     };
-    return this.send(message as unknown as WebSocketMessage);
+    
+    console.log('Sending audio chunk via WebSocket:', {
+      type: message.type,
+      audioDataLength: audioData.length,
+      sampleRate: sampleRate,
+      timestamp: message.timestamp
+    });
+    
+    const success = this.send(message as unknown as WebSocketMessage);
+    if (!success) {
+      console.error('Failed to send audio chunk - WebSocket not connected');
+    }
+    return success;
   }
 
   sendControlMessage(action: 'start' | 'stop' | 'pause' | 'resume'): boolean {
