@@ -1,3 +1,5 @@
+// --- Toast notification integration ---
+import { useToast } from '../components/ui/modern/ToastContainer';
 import { WebSocketMessage, AudioChunkMessage, CoachingResult, RealtimeFeedback } from '../types';
 
 export type WebSocketEventType = 'open' | 'close' | 'error' | 'message' | 'coaching_result' | 'realtime_feedback' | 'milestone_achieved';

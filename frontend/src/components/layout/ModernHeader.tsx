@@ -60,13 +60,29 @@ const ModernHeader: React.FC = () => {
           className="flex items-center space-x-4"
         >
           <motion.div
-            className="w-12 h-12 bg-gradient-to-br from-blue-500/20 to-purple-500/20 border border-blue-500/30 rounded-2xl flex items-center justify-center"
-            whileHover={{ scale: 1.05, rotate: 5 }}
+            className="w-14 h-14 bg-gradient-to-br from-blue-500 via-purple-600 to-fuchsia-600 shadow-xl border-2 border-blue-400/30 rounded-3xl flex items-center justify-center"
+            whileHover={{ scale: 1.08, rotate: 8 }}
+            whileTap={{ scale: 0.98 }}
+            transition={{ type: "spring", stiffness: 200, damping: 15 }}
           >
-            <pageInfo.icon className="w-6 h-6 text-blue-400" />
+            <pageInfo.icon className="w-7 h-7 text-white drop-shadow-lg" />
           </motion.div>
           <div>
-            <h1 className="text-xl font-bold text-white">{pageInfo.title}</h1>
+            <motion.h1
+              className="text-2xl font-extrabold text-white tracking-tight relative"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2, duration: 0.5 }}
+            >
+              {pageInfo.title}
+              <motion.span
+                className="block h-1 w-10 bg-gradient-to-r from-blue-400 via-purple-400 to-fuchsia-400 rounded-full mt-1"
+                layoutId="header-underline"
+                initial={{ scaleX: 0 }}
+                animate={{ scaleX: 1 }}
+                transition={{ delay: 0.4, duration: 0.5 }}
+              />
+            </motion.h1>
             <p className="text-sm text-slate-400">{pageInfo.subtitle}</p>
           </div>
         </motion.div>

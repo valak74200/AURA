@@ -1,120 +1,91 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
-import { createPortal } from 'react-dom';
-import { AnimatePresence } from 'framer-motion';
-import Toast, { ToastProps } from './Toast';
+import React, { createContext, useContext, useState, useCallback } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { CheckCircle, AlertCircle, Info, X } from "lucide-react";
 
-interface ToastContextType {
-  showToast: (toast: Omit<ToastProps, 'id'>) => void;
-  removeToast: (id: string) => void;
-  clearAllToasts: () => void;
+type ToastType = "success" | "error" | "info";
+
+export interface Toast {
+  id: string;
+  type: ToastType;
+  message: string;
+  duration?: number;
 }
 
-const ToastContext = createContext<ToastContextType | undefined>(undefined);
-
-interface ToastWithVisibility extends ToastProps {
-  isVisible: boolean;
+interface ToastContextProps {
+  showToast: (message: string, type?: ToastType, duration?: number) => void;
 }
 
-interface ToastProviderProps {
-  children: ReactNode;
-  position?: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left' | 'top-center';
-  maxToasts?: number;
-}
+const ToastContext = createContext<ToastContextProps | undefined>(undefined);
 
-export const ToastProvider: React.FC<ToastProviderProps> = ({
-  children,
-  position = 'top-right',
-  maxToasts = 5,
-}) => {
-  const [toasts, setToasts] = useState<ToastWithVisibility[]>([]);
+export const useToast = () => {
+  const ctx = useContext(ToastContext);
+  if (!ctx) throw new Error("useToast must be used within ToastProvider");
+  return ctx;
+};
 
-  const showToast = useCallback((toastData: Omit<ToastProps, 'id'>) => {
+export const ToastProvider: React.FC<{
+  children: React.ReactNode;
+  position?: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left';
+}> = ({ children, position = 'top-right' }) => {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const showToast = useCallback((message: string, type: ToastType = "info", duration = 3500) => {
     const id = Math.random().toString(36).substr(2, 9);
-    const duration = toastData.duration || 5000;
-    
-    const newToast: ToastWithVisibility = {
-      ...toastData,
-      id,
-      isVisible: true,
-    };
-
-    setToasts(prev => {
-      const updated = [newToast, ...prev].slice(0, maxToasts);
-      return updated;
-    });
-
-    // Auto-remove after duration
-    if (duration > 0) {
-      setTimeout(() => {
-        removeToast(id);
-      }, duration);
-    }
-  }, [maxToasts]);
-
-  const removeToast = useCallback((id: string) => {
-    setToasts(prev => prev.map(toast => 
-      toast.id === id ? { ...toast, isVisible: false } : toast
-    ));
-
-    // Remove from array after animation
+    setToasts((prev) => [...prev, { id, type, message, duration }]);
     setTimeout(() => {
-      setToasts(prev => prev.filter(toast => toast.id !== id));
-    }, 300);
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, duration);
   }, []);
 
-  const clearAllToasts = useCallback(() => {
-    setToasts(prev => prev.map(toast => ({ ...toast, isVisible: false })));
-    setTimeout(() => {
-      setToasts([]);
-    }, 300);
-  }, []);
-
-  const getPositionClasses = () => {
-    switch (position) {
-      case 'top-right':
-        return 'top-6 right-6';
-      case 'top-left':
-        return 'top-6 left-6';
-      case 'bottom-right':
-        return 'bottom-6 right-6';
-      case 'bottom-left':
-        return 'bottom-6 left-6';
-      case 'top-center':
-        return 'top-6 left-1/2 transform -translate-x-1/2';
-      default:
-        return 'top-6 right-6';
-    }
-  };
+  const removeToast = (id: string) => setToasts((prev) => prev.filter((t) => t.id !== id));
 
   return (
-    <ToastContext.Provider value={{ showToast, removeToast, clearAllToasts }}>
+    <ToastContext.Provider value={{ showToast }}>
       {children}
-      {createPortal(
-        <div className={`fixed z-50 ${getPositionClasses()}`}>
-          <div className="flex flex-col space-y-2">
-            <AnimatePresence>
-              {toasts.map((toast) => (
-                <Toast
-                  key={toast.id}
-                  {...toast}
-                  onClose={removeToast}
-                />
-              ))}
-            </AnimatePresence>
-          </div>
-        </div>,
-        document.body
-      )}
+      <div className={`fixed z-[9999] flex flex-col space-y-3 pointer-events-none ${
+        position === 'top-right' ? 'top-6 right-6' :
+        position === 'top-left' ? 'top-6 left-6' :
+        position === 'bottom-right' ? 'bottom-6 right-6' :
+        'bottom-6 left-6'
+      }`}>
+        <AnimatePresence>
+          {toasts.map((toast) => (
+            <motion.div
+              key={toast.id}
+              initial={{ opacity: 0, y: -30, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -30, scale: 0.95 }}
+              transition={{ type: "spring", stiffness: 400, damping: 30 }}
+              className={`pointer-events-auto min-w-[260px] max-w-xs px-5 py-4 rounded-2xl shadow-xl flex items-center gap-3
+                ${
+                  toast.type === "success"
+                    ? "bg-gradient-to-r from-green-500/90 to-emerald-600/90 text-white"
+                    : toast.type === "error"
+                    ? "bg-gradient-to-r from-red-500/90 to-pink-600/90 text-white"
+                    : "bg-gradient-to-r from-blue-500/90 to-purple-600/90 text-white"
+                }
+              `}
+            >
+              <span>
+                {toast.type === "success" && <CheckCircle className="w-5 h-5" />}
+                {toast.type === "error" && <AlertCircle className="w-5 h-5" />}
+                {toast.type === "info" && <Info className="w-5 h-5" />}
+              </span>
+              <span className="flex-1">{toast.message}</span>
+              <button
+                className="ml-2 text-white/70 hover:text-white transition-colors pointer-events-auto"
+                onClick={() => removeToast(toast.id)}
+                aria-label="Fermer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
     </ToastContext.Provider>
   );
 };
 
-export const useToast = () => {
-  const context = useContext(ToastContext);
-  if (context === undefined) {
-    throw new Error('useToast must be used within a ToastProvider');
-  }
-  return context;
-};
-
+// Export par défaut pour la compatibilité
 export default ToastProvider;

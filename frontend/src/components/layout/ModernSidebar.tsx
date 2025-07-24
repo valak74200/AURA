@@ -132,22 +132,30 @@ const ModernSidebar: React.FC = () => {
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: 0.4 + index * 0.1 }}
-                whileHover={{ x: 4, scale: 1.02 }}
+                whileHover={{ x: 8, scale: 1.04, boxShadow: "0 4px 24px 0 rgba(80,80,255,0.10)" }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => navigate(item.path)}
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-left transition-all duration-200 group ${
+                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl text-left transition-all duration-200 group shadow-none ${
                   isActive
-                    ? 'bg-gradient-to-r from-blue-500/20 to-purple-500/20 text-white border border-blue-500/30 shadow-lg'
-                    : 'text-slate-300 hover:text-white hover:bg-slate-800/50'
+                    ? 'bg-gradient-to-r from-blue-600/30 to-purple-600/30 text-white border border-blue-500/40 shadow-xl ring-2 ring-blue-400/30'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800/60 hover:shadow-lg'
                 }`}
+                style={{
+                  backdropFilter: isActive ? "blur(6px)" : undefined,
+                  WebkitBackdropFilter: isActive ? "blur(6px)" : undefined,
+                }}
               >
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 ${
-                  isActive 
-                    ? `bg-gradient-to-r ${item.gradient} shadow-lg` 
-                    : 'bg-slate-800 group-hover:bg-slate-700'
-                }`}>
+                <motion.div
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 ${
+                    isActive
+                      ? `bg-gradient-to-r ${item.gradient} shadow-lg`
+                      : 'bg-slate-800 group-hover:bg-slate-700'
+                  }`}
+                  whileHover={isActive ? { scale: 1.08, rotate: 3 } : { scale: 1.04 }}
+                  whileTap={{ scale: 0.96 }}
+                >
                   <item.icon className={`w-5 h-5 ${isActive ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`} />
-                </div>
+                </motion.div>
                 <span className="font-medium">{item.label}</span>
                 {isActive && (
                   <motion.div

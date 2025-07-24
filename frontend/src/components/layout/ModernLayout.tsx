@@ -1,5 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
+import AnimatedBackground from './AnimatedBackground';
 import ModernSidebar from './ModernSidebar';
 import ModernHeader from './ModernHeader';
 
@@ -13,14 +14,9 @@ const ModernLayout: React.FC<ModernLayoutProps> = ({
   showSidebar = true 
 }) => {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 flex">
-      {/* Background Pattern */}
-      <div className="fixed inset-0 opacity-5">
-        <div className="absolute inset-0" style={{
-          backgroundImage: `radial-gradient(circle at 1px 1px, rgba(255,255,255,0.15) 1px, transparent 0)`,
-          backgroundSize: '20px 20px'
-        }} />
-      </div>
+    <div className="min-h-screen flex relative">
+      {/* Global Animated Background */}
+      <AnimatedBackground />
 
       {/* Sidebar */}
       {showSidebar && (
@@ -56,34 +52,6 @@ const ModernLayout: React.FC<ModernLayoutProps> = ({
             {children}
           </div>
         </motion.main>
-      </div>
-
-      {/* Animated Background Elements */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <motion.div
-          className="absolute top-1/4 left-1/4 w-64 h-64 bg-blue-500/5 rounded-full blur-3xl"
-          animate={{
-            scale: [1, 1.2, 1],
-            opacity: [0.3, 0.5, 0.3],
-          }}
-          transition={{
-            duration: 8,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
-        <motion.div
-          className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-500/5 rounded-full blur-3xl"
-          animate={{
-            scale: [1.2, 1, 1.2],
-            opacity: [0.2, 0.4, 0.2],
-          }}
-          transition={{
-            duration: 10,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
       </div>
     </div>
   );

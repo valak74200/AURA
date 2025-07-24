@@ -2,6 +2,7 @@ import React from 'react';
 import { clsx } from 'clsx';
 import { Loader2 } from 'lucide-react';
 import { ButtonProps } from '../../types';
+import { motion } from 'framer-motion';
 
 const Button: React.FC<ButtonProps> = ({
   variant = 'primary',
@@ -13,13 +14,13 @@ const Button: React.FC<ButtonProps> = ({
   onClick,
   ...props
 }) => {
-  const baseClasses = 'inline-flex items-center justify-center rounded-md font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:pointer-events-none disabled:opacity-50';
+  const baseClasses = 'inline-flex items-center justify-center rounded-xl font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:pointer-events-none disabled:opacity-50';
   
   const variantClasses = {
-    primary: 'bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700',
-    secondary: 'bg-gray-200 text-gray-900 hover:bg-gray-300 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600',
+    primary: 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg hover:from-blue-600 hover:to-purple-700',
+    secondary: 'bg-white text-blue-600 border border-blue-200 hover:bg-blue-50',
     outline: 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700',
-    ghost: 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700',
+    ghost: 'bg-transparent text-blue-400 hover:bg-blue-50 hover:text-blue-600',
   };
 
   const sizeClasses = {
@@ -31,7 +32,9 @@ const Button: React.FC<ButtonProps> = ({
   const isDisabled = disabled || loading;
 
   return (
-    <button
+    <motion.button
+      whileHover={{ scale: 1.04, boxShadow: "0 4px 24px 0 rgba(80,80,255,0.10)" }}
+      whileTap={{ scale: 0.97 }}
       className={clsx(
         baseClasses,
         variantClasses[variant],
@@ -45,7 +48,7 @@ const Button: React.FC<ButtonProps> = ({
     >
       {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
       {children}
-    </button>
+    </motion.button>
   );
 };
 
