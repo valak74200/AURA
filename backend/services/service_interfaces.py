@@ -13,6 +13,19 @@ from models.session import PresentationSessionData
 from models.feedback import RealTimeFeedback, SessionFeedback
 from utils.service_container import IService
 
+class IVoiceService(IService):
+    """Interface for text-to-speech and viseme timeline generation."""
+    @abstractmethod
+    async def synthesize(
+        self,
+        text: str,
+        voice_id: Optional[str] = None,
+        model: Optional[str] = None,
+        sample_rate: Optional[int] = None,
+        lang: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return audio bytes/base64 and viseme timeline."""
+        pass
 
 class IAudioService(IService):
     """Interface for audio processing services."""

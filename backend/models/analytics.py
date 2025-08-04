@@ -8,7 +8,7 @@ with comprehensive data validation and JSON encoding.
 from datetime import datetime, date
 from typing import Dict, List, Optional, Any, Union
 from uuid import UUID
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from enum import Enum
 
 
@@ -59,11 +59,11 @@ class PerformanceMetric(BaseModel):
     presentation_topic: Optional[str] = Field(None, description="Presentation topic")
     duration_seconds: Optional[float] = Field(None, ge=0, description="Session duration")
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat(),
-            UUID: lambda v: str(v)
-        }
+    model_config = ConfigDict(
+        use_enum_values=True,
+        ser_json_timedelta="float",
+        ser_json_bytes="utf8"
+    )
 
 
 class AggregatedMetric(BaseModel):
@@ -82,11 +82,11 @@ class AggregatedMetric(BaseModel):
     sample_count: int = Field(..., ge=0, description="Number of samples in aggregation")
     standard_deviation: Optional[float] = Field(None, ge=0, description="Standard deviation of samples")
     
-    class Config:
-        json_encoders = {
-            date: lambda v: v.isoformat(),
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(
+        use_enum_values=True,
+        ser_json_timedelta="float",
+        ser_json_bytes="utf8"
+    )
 
 
 class TrendData(BaseModel):
@@ -127,17 +127,17 @@ class UserAnalytics(BaseModel):
     metric_trends: List[TrendData] = Field(default_factory=list, description="Trend analysis for each metric")
     
     # Insights
-    strengths: List[str] = Field(default_factory=list, max_items=5, description="Identified strengths")
-    improvement_areas: List[str] = Field(default_factory=list, max_items=5, description="Areas needing improvement")
-    recommendations: List[str] = Field(default_factory=list, max_items=10, description="Personalized recommendations")
+    strengths: List[str] = Field(default_factory=list, max_length=5, description="Identified strengths")
+    improvement_areas: List[str] = Field(default_factory=list, max_length=5, description="Areas needing improvement")
+    recommendations: List[str] = Field(default_factory=list, max_length=10, description="Personalized recommendations")
     
     generated_at: datetime = Field(default_factory=datetime.utcnow, description="Analytics generation time")
     
-    class Config:
-        json_encoders = {
-            date: lambda v: v.isoformat(),
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(
+        use_enum_values=True,
+        ser_json_timedelta="float",
+        ser_json_bytes="utf8"
+    )
 
 
 class SystemMetrics(BaseModel):
@@ -206,10 +206,9 @@ class BenchmarkData(BaseModel):
     last_updated: date = Field(..., description="When benchmark was last updated")
     data_source: str = Field(..., description="Source of benchmark data")
     
-    class Config:
-        json_encoders = {
-            date: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(
+        use_enum_values=True
+    )
 
 
 class AnalyticsQuery(BaseModel):
@@ -230,12 +229,14 @@ class AnalyticsQuery(BaseModel):
     include_trends: bool = Field(default=False, description="Include trend analysis")
     include_comparisons: bool = Field(default=False, description="Include comparison analysis")
     
-    @validator('end_date')
-    def validate_date_range(cls, v, values):
+    @field_validator('end_date')
+    @classmethod
+    def validate_date_range(cls, v, info):
         """Ensure end_date is after start_date."""
-        if v is not None and 'start_date' in values and values['start_date'] is not None:
-            if v <= values['start_date']:
-                raise ValueError('end_date must be after start_date')
+        values = info.data if hasattr(info, "data") else {}
+        start = values.get('start_date')
+        if v is not None and start is not None and v <= start:
+            raise ValueError('end_date must be after start_date')
         return v
 
 
@@ -254,8 +255,8 @@ class AnalyticsResponse(BaseModel):
     processing_time_ms: int = Field(..., ge=0, description="Query processing time in milliseconds")
     generated_at: datetime = Field(default_factory=datetime.utcnow, description="Response generation time")
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat(),
-            date: lambda v: v.isoformat()
-        } 
+    model_config = ConfigDict(
+        use_enum_values=True,
+        ser_json_timedelta="float",
+        ser_json_bytes="utf8"
+    )

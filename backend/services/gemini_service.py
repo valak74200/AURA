@@ -88,7 +88,7 @@ class GeminiService:
         transcript: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
         language: SupportedLanguage = SupportedLanguage.FRENCH
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
         Generate presentation feedback using Gemini with cultural adaptation.
         
@@ -99,13 +99,15 @@ class GeminiService:
             language: Target language for culturally appropriate feedback
             
         Returns:
-            List of feedback items adapted to the language and culture
+            Dict with keys:
+              - feedback: List of feedback items
+              - metadata: details about generation
         """
         try:
             # Build culturally adapted prompt
             prompt = self._build_feedback_prompt(voice_metrics, transcript, context, language)
             
-            # Generate feedback
+            # Generate feedback (run sync client in thread)
             response = await asyncio.to_thread(
                 self.client.generate_content,
                 prompt
@@ -113,6 +115,18 @@ class GeminiService:
             
             # Parse and validate response
             feedback_items = self._parse_feedback_response(response.text)
+            if not isinstance(feedback_items, list):
+                feedback_items = []
+            
+            result: Dict[str, Any] = {
+                "feedback": feedback_items,
+                "metadata": {
+                    "model": self.config.default_gemini_model,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "has_transcript": bool(transcript is not None),
+                    "feedback_count": len(feedback_items),
+                }
+            }
             
             logger.info(
                 "Generated presentation feedback",
@@ -122,7 +136,7 @@ class GeminiService:
                 }
             )
             
-            return feedback_items
+            return result
             
         except genai.types.BlockedPromptException as e:
             logger.warning(f"Prompt was blocked by safety filters: {e}")
@@ -142,7 +156,15 @@ class GeminiService:
                 raise AIModelException(f"Invalid request: {e}", settings.default_gemini_model)
         except Exception as e:
             logger.error(f"Unexpected Gemini API error: {e}", exc_info=True)
-            raise AIModelException(f"Unexpected error: {e}", settings.default_gemini_model)
+            # Return a consistent dict shape on unexpected content formatting issues
+            return {
+                "feedback": [],
+                "metadata": {
+                    "model": self.config.default_gemini_model,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "error": str(e)
+                }
+            }
     
     async def analyze_presentation_structure(
         self,

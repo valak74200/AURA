@@ -1,7 +1,7 @@
 import React, { useEffect, Suspense } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { useAuthStore } from './store/useAuthStore';
 import { LanguageProvider } from './contexts/LanguageContext';
 import ModernLayout from './components/layout/ModernLayout';
@@ -18,6 +18,7 @@ const ModernNewSessionPage = React.lazy(() => import('./pages/sessions/ModernNew
 const SessionDetailPage = React.lazy(() => import('./pages/sessions/SessionDetailPage'));
 const AnalyticsPage = React.lazy(() => import('./pages/analytics/AnalyticsPage'));
 const SettingsPage = React.lazy(() => import('./pages/SettingsPage'));
+const TtsTestPage = React.lazy(() => import('./pages/TtsTest'));
 
 // Create QueryClient instance
 const queryClient = new QueryClient({
@@ -186,6 +187,16 @@ function App() {
                               <SettingsPage />
                             </ModernLayout>
                           </ProtectedRoute>
+                        }
+                      />
+
+                      {/* Public test route for real-time TTS */}
+                      <Route
+                        path="/tts-test"
+                        element={
+                          <PublicRoute>
+                            <TtsTestPage />
+                          </PublicRoute>
                         }
                       />
                       

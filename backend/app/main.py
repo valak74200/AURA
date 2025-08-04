@@ -6,9 +6,22 @@ and API route integration.
 """
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict
+
+# Load environment variables early so uvicorn picks up ELEVENLABS_API_KEY and others
+try:
+    from dotenv import load_dotenv  # type: ignore
+    # Prefer backend/.env then repo root .env; do not override already-set env vars
+    backend_env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    project_env_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+    load_dotenv(backend_env_path, override=False)
+    load_dotenv(project_env_path, override=False)
+except Exception:
+    # dotenv is optional in production; ignore if not available
+    pass
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -146,29 +159,64 @@ app.add_middleware(
 )
 
 
+# Request ID middleware for correlation and logging
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Obtain or generate a request id
+        request_id = request.headers.get("x-request-id")
+        if not request_id:
+            import uuid
+            request_id = str(uuid.uuid4())
+
+        # Attach to request state for downstream use
+        request.state.request_id = request_id
+
+        # Process request
+        response = await call_next(request)
+
+        # Ensure header is set on response
+        try:
+            response.headers["X-Request-ID"] = request_id
+        except Exception:
+            # In case response doesn't support headers mapping (edge cases)
+            pass
+
+        return response
+
 # Request logging middleware
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = datetime.utcnow()
-        
+
         # Process request
         response = await call_next(request)
-        
-        # Log request
+
+        # Log request with correlation id
         process_time = (datetime.utcnow() - start_time).total_seconds()
+        request_id = getattr(request.state, "request_id", request.headers.get("x-request-id", "unknown"))
         logger.info(
             "Request processed",
             extra={
                 "method": request.method,
                 "url": str(request.url),
                 "status_code": response.status_code,
-                "process_time": process_time
+                "process_time": process_time,
+                "request_id": request_id,
             }
         )
-        
+
+        # Make sure response also has the header (idempotent)
+        try:
+            if "X-Request-ID" not in response.headers:
+                response.headers["X-Request-ID"] = str(request_id)
+        except Exception:
+            pass
+
         return response
 
 
+# Order: set RequestID first so later middlewares can use it
+app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 
 
@@ -270,19 +318,16 @@ async def root():
 
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    health_data = {
+async def health_check(request: Request):
+    """Minimal health endpoint (uptime, version)."""
+    minimal = {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "services": {
-            "api": "running",
-            "storage": "connected" if 'storage' in services else "disconnected",
-            "audio": "connected" if 'audio' in services else "disconnected", 
-            "gemini": "connected" if 'gemini' in services else "disconnected"
-        }
+        "version": app.version,
+        "uptime_hint": "See /api/v1/health for detailed service status"
     }
-    return serialize_response_data(health_data)
+    # Ensure we return a dict/list (no double-serialization risk)
+    return serialize_response_data(minimal)
 
 
 @app.get("/info")

@@ -17,7 +17,7 @@ from services.service_interfaces import (
     IAudioService, IGeminiService, IStorageService, IAuthService,
     ICacheService, IMetricsService, INotificationService,
     IAnalyticsService, IEventBus, IHealthCheckService,
-    IConfigurationService, ISecurityService
+    IConfigurationService, ISecurityService, IVoiceService
 )
 
 # Import existing service implementations
@@ -118,6 +118,12 @@ class ServiceRegistry:
             IAnalyticsService,
             AnalyticsService
         )
+        
+        # Voice/TTS Service (ElevenLabs)
+        self.container.register_singleton(
+            IVoiceService,
+            factory=lambda: self._create_elevenlabs_voice_service()
+        )
     
     async def _register_infrastructure_services(self):
         """Register infrastructure services."""
@@ -157,6 +163,16 @@ class ServiceRegistry:
         """Factory method for creating Gemini service."""
         from services.gemini_service import create_gemini_service
         return create_gemini_service(settings)
+
+    def _create_elevenlabs_voice_service(self):
+        """Factory method for creating ElevenLabs Voice/TTS service."""
+        try:
+            # Lazy import to avoid hard dependency at import time
+            from services.voice.elevenlabs_service import ElevenLabsVoiceService
+        except Exception as e:
+            logger.error(f"Failed to import ElevenLabsVoiceService: {e}")
+            raise
+        return ElevenLabsVoiceService(settings)
     
     async def get_service(self, service_type):
         """Get a service instance."""

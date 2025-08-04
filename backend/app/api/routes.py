@@ -14,6 +14,9 @@ import json
 
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Body, Query, status
 from fastapi.responses import JSONResponse
+import os
+import json
+import aiohttp
 
 from utils.json_encoder import serialize_response_data
 
@@ -55,6 +58,9 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
     
     def get_gemini_service():
         return services.get('gemini')
+
+    def get_voice_service():
+        return services.get('voice')
     
     # ===== SESSION MANAGEMENT ENDPOINTS =====
     
@@ -109,6 +115,197 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
                 detail=f"Failed to create session: {str(e)}"
             )
     
+    # ===== TTS ENDPOINT =====
+    @router.post("/tts")
+    async def synthesize_tts(
+        payload: Dict[str, Any] = Body(..., description="TTS request payload: { text, voiceId?, model?, sampleRate?, lang?, ssml?, format? }")
+    ):
+        """
+        Synthesize speech using the configured Voice/TTS service (ElevenLabs).
+        Request fields:
+          - text: string (required unless ssml provided)
+          - ssml: string (optional; if present, takes precedence over text)
+          - voiceId: string (optional; defaults to configured voice)
+          - model: string (optional; defaults to configured model)
+          - sampleRate: number (optional; defaults to configured sample rate)
+          - lang: string (optional hint)
+          - format: string (optional; mp3_44100_128 | mp3_22050_128)
+        Response:
+          {
+            "audio_base64": string,
+            "sample_rate": number,
+            "visemes": [{ "time_ms": number, "morph": string, "weight": number }],
+            "text": string,
+            "voice_id": string,
+            "model": string
+          }
+        """
+        try:
+            voice_service = get_voice_service()
+            if not voice_service:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Voice service not available"
+                )
+
+            text = payload.get("text")
+            ssml = payload.get("ssml")
+            if not text and not ssml:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Provide 'text' or 'ssml'"
+                )
+
+            voice_id = payload.get("voiceId")
+            model = payload.get("model")
+            sample_rate = payload.get("sampleRate")
+            lang = payload.get("lang")
+            # 'format' forwarded to service (mp3_44100_128 | mp3_22050_128)
+            _format = payload.get("format")
+ 
+            # For MVP we pass text or ssml (prefer ssml when provided)
+            effective_text = ssml if ssml else text
+ 
+            result = await voice_service.synthesize(
+                text=effective_text,
+                voice_id=voice_id,
+                model=model,
+                sample_rate=sample_rate,
+                lang=lang,
+                output_format=_format,
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=serialize_response_data(result)
+            )
+ 
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"TTS synthesis failed: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"TTS synthesis failed: {str(e)}"
+            )
+    @router.get("/debug/tts-auth")
+    async def debug_tts_auth():
+        """
+        Vérifie la connectivité WS ElevenLabs stream-input:
+        - Endpoint: wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input
+        - Handshake avec Authorization: Bearer ELEVENLABS_API_KEY
+        - Envoi d’un start minimal puis fermeture
+        Retourne un diagnostic JSON avec statut et éventuels messages du serveur.
+        """
+        try:
+            # Resolve config without pulling DI here (routes.py uses provided 'services' in create_router).
+            # On garde une lecture via env et valeurs par défaut cohérentes avec /ws/tts.
+            from app.config import get_settings
+            settings = get_settings()
+            api_key = os.getenv("ELEVENLABS_API_KEY") or getattr(settings, "elevenlabs_api_key", None)
+            if not api_key:
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content=serialize_response_data({
+                        "ok": False,
+                        "code": "NO_API_KEY",
+                        "message": "ELEVENLABS_API_KEY manquant"
+                    })
+                )
+            voice_id = getattr(settings, "elevenlabs_default_voice_id", "Rachel")
+            model = getattr(settings, "elevenlabs_model", "eleven_multilingual_v2")
+            output_format = "mp3_44100_128"
+            url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input"
+            diag = {
+                "endpoint": url,
+                "voice_id": voice_id,
+                "model": model,
+                "output_format": output_format
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(
+                    url,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    autoclose=True,
+                    autoping=True,
+                    max_msg_size=2 * 1024 * 1024
+                ) as ws:
+                    start_payload = {
+                        "type": "start",
+                        "model_id": model,
+                        "output_format": output_format,
+                        "optimize_streaming_latency": 3,
+                        "voice_settings": {"stability": 0.5, "similarity_boost": 0.5}
+                    }
+                    await ws.send_json(start_payload)
+                    # Lire quelques réponses pour capter erreurs/meta
+                    received = []
+                    for _ in range(2):
+                        msg = await ws.receive(timeout=5)
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                data = json.loads(msg.data)
+                            except Exception:
+                                received.append({"text": msg.data})
+                                continue
+                            received.append(data)
+                            code = 0
+                            try:
+                                code = int(data.get("code", 0))
+                            except Exception:
+                                pass
+                            if code in (401, 403) or "unauthorized" in str(data).lower():
+                                return JSONResponse(
+                                    status_code=status.HTTP_200_OK,
+                                    content=serialize_response_data({
+                                        "ok": False,
+                                        "code": "UNAUTHORIZED",
+                                        "message": "ElevenLabs a refusé l'authentification (401/403)",
+                                        "diagnostic": {**diag, "responses": received}
+                                    })
+                                )
+                        elif msg.type == aiohttp.WSMsgType.BINARY:
+                            diag["received_binary"] = True
+                            break
+                        elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
+                            break
+                        elif msg.type == aiohttp.WSMsgType.ERROR:
+                            return JSONResponse(
+                                status_code=status.HTTP_200_OK,
+                                content=serialize_response_data({
+                                    "ok": False,
+                                    "code": "STREAM_ERROR",
+                                    "message": str(ws.exception()),
+                                    "diagnostic": diag
+                                })
+                            )
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=serialize_response_data({
+                    "ok": True,
+                    "message": "Handshake WS et start acceptés",
+                    "diagnostic": diag
+                })
+            )
+        except aiohttp.WSServerHandshakeError as e:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=serialize_response_data({
+                    "ok": False,
+                    "code": "HANDSHAKE_FAILED",
+                    "status": getattr(e, "status", None),
+                    "message": f"Handshake WS échoué: {str(e)}"
+                })
+            )
+        except Exception as e:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=serialize_response_data({
+                    "ok": False,
+                    "code": "UNKNOWN_ERROR",
+                    "message": str(e)
+                })
+            )
     @router.get("/sessions/{session_id}", response_model=PresentationSessionResponse)
     async def get_session(session_id: UUID):
         """
@@ -232,7 +429,7 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             # Update session
             updated_session = await storage_service.update_session(
                 session_id=session_id,
-                updates=request.dict(exclude_unset=True)
+                updates=request.model_dump(exclude_unset=True)
             )
             
             logger.info(f"Session {session_id} updated successfully")
@@ -242,14 +439,16 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
                 id=str(updated_session.id),
                 user_id=updated_session.user_id,
                 title=updated_session.title,
-                session_type=updated_session.config.session_type.value,
-                language=updated_session.config.language,
+                session_type=updated_session.config.session_type.value if updated_session.config else "practice",
+                language=updated_session.config.language if updated_session.config else "fr",
                 status=updated_session.status,
                 created_at=updated_session.created_at,
                 started_at=updated_session.started_at,
                 ended_at=updated_session.ended_at,
-                duration=0,
-                config=updated_session.config.dict() if updated_session.config else None
+                duration=int(updated_session.duration_seconds or 0),
+                config=updated_session.config.model_dump() if updated_session.config else None,
+                stats=updated_session.state.model_dump() if getattr(updated_session, "state", None) else None,
+                feedback_summary=None
             )
             
             return response_data
@@ -857,93 +1056,73 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
     @router.get("/health")
     async def health_check():
         """
-        System health check endpoint.
-        
-        Returns the status of all system components and services including cache.
+        Detailed system health endpoint (DRY via IHealthCheckService).
+        Returns overall status and per-service details. Use /health for minimal probe.
+        Never raises on component failures; maps exceptions to degraded/down states and returns 200/503.
         """
-        # Get services dynamically
-        storage_service = get_storage_service()
-        audio_service = get_audio_service()
-        gemini_service = services.get('gemini')
-        cache_service = services.get('cache')
-        
-        health_status = {
-            "status": "healthy",
-            "timestamp": datetime.utcnow().isoformat(),
-            "services": {
-                "storage": "healthy" if storage_service else "unavailable",
-                "audio_processing": "healthy" if audio_service else "unavailable",
-                "ai_services": "healthy" if gemini_service else "unavailable",
-                "cache": "healthy" if cache_service else "unavailable"
-            },
-            "version": "1.0.0",
-            "environment": "development"
+        health_payload: Dict[str, Any] = {
+            "status": "unhealthy",
+            "components": {},
         }
-        
-        logger.info(f"Health check - Services available: storage={storage_service is not None}, audio={audio_service is not None}, gemini={gemini_service is not None}")
-        
-        # Check service health
         try:
-            if storage_service:
-                # Test storage service - fix: remove limit parameter
-                test_sessions = await storage_service.list_sessions()
-                health_status["services"]["storage"] = "healthy"
+            health_service = services.get('health')
+            if not health_service:
+                # Service missing -> degraded overall, but respond 503 with structured body
+                health_payload["status"] = "unhealthy"
+                health_payload["components"]["health_service"] = {"status": "down", "error": "not_available"}
+            else:
+                try:
+                    overall_health = await health_service.get_overall_health()
+                    # Merge but protect against None/invalid
+                    if isinstance(overall_health, dict):
+                        health_payload.update(overall_health)
+                        # Ensure legacy key "services" exists for tests compatibility
+                        components = overall_health.get("components") or health_payload.get("components") or {}
+                        if "services" not in health_payload:
+                            health_payload["services"] = {
+                                k: (v.get("status") if isinstance(v, dict) else v)
+                                for k, v in components.items()
+                            }
+                except Exception as svc_err:
+                    logger.warning(f"Health service probe failed: {svc_err}")
+                    health_payload["components"]["health_service"] = {
+                        "status": "degraded",
+                        "error": str(svc_err)
+                    }
+                    # Ensure tests still see "services" key even on failure path
+                    health_payload["services"] = {
+                        "health_service": "degraded"
+                    }
+                    health_payload["status"] = "unhealthy"
+            
+            # Attach basic app metadata
+            health_payload.update({
+                "version": "1.0.0",
+                "environment": "development",
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            
+            # Normalize and choose status code
+            overall_status = str(health_payload.get("status", "unhealthy")).lower()
+            status_code = status.HTTP_200_OK if overall_status == "healthy" else status.HTTP_503_SERVICE_UNAVAILABLE
+            return JSONResponse(
+                status_code=status_code,
+                content=serialize_response_data(health_payload)
+            )
         except Exception as e:
-            logger.error(f"Storage service health check failed: {e}")
-            health_status["services"]["storage"] = "unhealthy"
-            health_status["status"] = "degraded"
-        
-        try:
-            if audio_service:
-                # Test audio service
-                stats = await audio_service.get_processing_stats()
-                health_status["services"]["audio_processing"] = "healthy"
-                # Don't include stats to avoid serialization issues
-        except Exception as e:
-            logger.error(f"Audio service health check failed: {e}")
-            health_status["services"]["audio_processing"] = "unhealthy"
-            health_status["status"] = "degraded"
-        
-        try:
-            if gemini_service:
-                # Test AI service with simple query - fix: await properly
-                test_response = gemini_service.client.generate_content("Test")
-                # Don't await - it's synchronous in the current implementation
-                health_status["services"]["ai_services"] = "healthy"
-        except Exception as e:
-            logger.error(f"AI service health check failed: {e}")
-            health_status["services"]["ai_services"] = "unhealthy"
-            health_status["status"] = "degraded"
-        
-        # Test cache service
-        try:
-            if cache_service:
-                # Test cache service health
-                from services.cache_service import CacheService
-                cache_wrapper = CacheService(cache_service)
-                cache_health = await cache_wrapper.health_check()
-                health_status["services"]["cache"] = cache_health["status"]
-                health_status["cache_stats"] = cache_health.get("stats", {})
-                
-                if cache_health["status"] != "healthy":
-                    health_status["status"] = "degraded"
-        except Exception as e:
-            logger.error(f"Cache service health check failed: {e}")
-            health_status["services"]["cache"] = "unhealthy"
-            health_status["status"] = "degraded"
-        
-        # Determine overall status
-        if health_status["status"] != "degraded":
-            unhealthy_services = [k for k, v in health_status["services"].items() if v != "healthy"]
-            if unhealthy_services:
-                health_status["status"] = "degraded"
-        
-        status_code = status.HTTP_200_OK if health_status["status"] == "healthy" else status.HTTP_503_SERVICE_UNAVAILABLE
-        
-        return JSONResponse(
-            status_code=status_code,
-            content=serialize_response_data(health_status)
-        )
+            # Final safeguard: never 500; return structured unhealthy response
+            logger.error(f"Health check failed (caught): {e}")
+            health_payload["components"]["health_endpoint"] = {"status": "down", "error": str(e)}
+            health_payload["status"] = "unhealthy"
+            health_payload.update({
+                "version": "1.0.0",
+                "environment": "development",
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=serialize_response_data(health_payload)
+            )
     
     @router.get("/test")
     async def test_services():

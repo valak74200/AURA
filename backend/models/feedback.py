@@ -8,7 +8,7 @@ and metadata handling for presentation coaching feedback.
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from uuid import UUID
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from enum import Enum
 
 
@@ -40,10 +40,10 @@ class VoiceMetrics(BaseModel):
     clarity_score: float = Field(..., ge=0, le=1, description="Speech clarity score")
     filler_word_count: int = Field(..., ge=0, description="Number of filler words detected")
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    model_config = ConfigDict(
+        ser_json_timedelta="float",
+        ser_json_bytes="utf8"
+    )
 
 
 class FeedbackItem(BaseModel):
@@ -62,11 +62,14 @@ class FeedbackItem(BaseModel):
     audio_segment_end: Optional[float] = Field(None, ge=0, description="End time of relevant audio segment")
     detected_text: Optional[str] = Field(None, description="Transcribed text related to feedback")
     
-    @validator('audio_segment_end')
-    def validate_audio_segment(cls, v, values):
+    @field_validator('audio_segment_end')
+    @classmethod
+    def validate_audio_segment(cls, v, info):
         """Ensure end time is after start time."""
-        if v is not None and 'audio_segment_start' in values and values['audio_segment_start'] is not None:
-            if v <= values['audio_segment_start']:
+        values = info.data if hasattr(info, "data") else {}
+        start = values.get('audio_segment_start')
+        if v is not None and start is not None:
+            if v <= start:
                 raise ValueError('audio_segment_end must be greater than audio_segment_start')
         return v
 
@@ -93,10 +96,13 @@ class SessionFeedback(BaseModel):
     model_version: str = Field(..., description="AI model version used")
     processing_time_ms: int = Field(..., ge=0, description="Processing time in milliseconds")
     
-    @validator('effective_speaking_time')
-    def validate_effective_speaking_time(cls, v, values):
+    @field_validator('effective_speaking_time')
+    @classmethod
+    def validate_effective_speaking_time(cls, v, info):
         """Ensure effective speaking time doesn't exceed total duration."""
-        if 'total_duration' in values and v > values['total_duration']:
+        values = info.data if hasattr(info, "data") else {}
+        total = values.get('total_duration')
+        if total is not None and v is not None and v > total:
             raise ValueError('effective_speaking_time cannot exceed total_duration')
         return v
 
@@ -127,8 +133,8 @@ class FeedbackSummary(BaseModel):
     
     session_id: UUID = Field(..., description="Session identifier")
     overall_rating: str = Field(..., description="Overall performance rating")
-    key_insights: List[str] = Field(..., max_items=5, description="Top 5 key insights")
-    priority_improvements: List[str] = Field(..., max_items=3, description="Top 3 priority improvements")
+    key_insights: List[str] = Field(..., max_length=5, description="Top 5 key insights")
+    priority_improvements: List[str] = Field(..., max_length=3, description="Top 3 priority improvements")
     
     # Comparative metrics
     improvement_from_last_session: Optional[float] = Field(None, description="Improvement percentage from last session")

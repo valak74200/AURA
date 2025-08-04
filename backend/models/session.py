@@ -8,7 +8,7 @@ timeout handling, and state management.
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from uuid import UUID, uuid4
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from enum import Enum
 from sqlalchemy import Column, String, DateTime, Boolean, Text, Integer, ForeignKey
 from sqlalchemy.orm import relationship
@@ -150,23 +150,27 @@ class PresentationSessionData(BaseModel):
     # Computed properties
     duration_seconds: Optional[float] = Field(default=None, description="Session duration in seconds")
     
-    @validator('expires_at', always=True)
-    def set_expiration(cls, v, values):
+    @field_validator('expires_at')
+    @classmethod
+    def set_expiration(cls, v, info):
         """Set expiration time based on max_duration if not provided."""
-        if v is None and 'created_at' in values and 'config' in values:
-            created_at = values['created_at']
-            max_duration = values['config'].max_duration
-            return created_at + timedelta(seconds=max_duration)
+        values = info.data if hasattr(info, "data") else {}
+        if v is None:
+            created_at = values.get('created_at')
+            config = values.get('config')
+            if created_at is not None and config is not None:
+                return created_at + timedelta(seconds=config.max_duration)
         return v
     
-    @validator('duration_seconds', always=True)
-    def calculate_duration(cls, v, values):
+    @field_validator('duration_seconds')
+    @classmethod
+    def calculate_duration(cls, v, info):
         """Calculate session duration if start and end times are available."""
-        if 'started_at' in values and 'ended_at' in values:
-            started = values['started_at']
-            ended = values['ended_at']
-            if started and ended:
-                return (ended - started).total_seconds()
+        values = info.data if hasattr(info, "data") else {}
+        started = values.get('started_at')
+        ended = values.get('ended_at')
+        if started and ended:
+            return (ended - started).total_seconds()
         return v
     
     @property
@@ -226,13 +230,11 @@ class PresentationSessionData(BaseModel):
         self.state.processing_errors += 1
         self.state.last_error = error_message
     
-    class Config:
-        """Pydantic configuration."""
-        use_enum_values = True
-        json_encoders = {
-            datetime: lambda v: v.isoformat(),
-            UUID: lambda v: str(v)
-        }
+    model_config = ConfigDict(
+        use_enum_values=True,
+        ser_json_timedelta="float",
+        ser_json_bytes="utf8"
+    )
 
 
 # ===== REQUEST/RESPONSE MODELS =====
@@ -298,8 +300,7 @@ class PresentationSessionResponse(BaseModel):
     stats: Optional[Dict[str, Any]] = None
     feedback_summary: Optional[str] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SessionsResponse(BaseModel):
@@ -309,8 +310,7 @@ class SessionsResponse(BaseModel):
     page: int
     limit: int
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # ============================================================================
 # MODÈLES SQLALCHEMY (BASE DE DONNÉES)

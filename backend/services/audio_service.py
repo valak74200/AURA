@@ -84,7 +84,9 @@ class AudioService:
             
             if not validation_result["valid"]:
                 if "too large" in validation_result["error"].lower():
-                    raise AudioTooLargeError(validation_result["error"])
+                    file_size = validation_result.get("size_bytes", len(audio_data))
+                    max_size = settings.max_audio_file_size
+                    raise AudioTooLargeError(file_size, max_size)
                 elif "empty" in validation_result["error"].lower():
                     raise AudioProcessingException("Audio file is empty")
                 else:
@@ -319,6 +321,13 @@ class AudioService:
         except Exception as e:
             logger.error(f"Cleanup failed for session {session_id}: {e}")
             return bool(False)
+
+    # Backwards-compat alias used by some tests
+    async def cleanup_audio_stream(self, session_id: str) -> bool:
+        """
+        Alias to cleanup_session for compatibility with older test suites.
+        """
+        return await self.cleanup_session(session_id)
     
     async def get_processing_stats(self) -> Dict[str, Any]:
         """Get audio processing statistics."""

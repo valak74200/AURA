@@ -12,8 +12,7 @@ from typing import AsyncIterator, Dict, Any, Optional, List
 from uuid import UUID
 import json
 
-from genai_processors import Processor, ProcessorPart
-from genai_processors import streams
+from genai_processors import ProcessorPart, streams
 
 from models.session import PresentationSessionData, SupportedLanguage
 from models.feedback import RealTimeFeedback, SessionFeedback
@@ -36,7 +35,7 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 
-class AuraPipeline(Processor):
+class AuraPipeline:
     """
     Main AURA pipeline orchestrating comprehensive presentation coaching.
     
@@ -51,7 +50,6 @@ class AuraPipeline(Processor):
         Args:
             session: The presentation session configuration and state
         """
-        super().__init__()
         self.session = session
         self.session_id = session.id
         self.config = session.config
@@ -146,8 +144,7 @@ class AuraPipeline(Processor):
     
     async def call(self, input_stream: AsyncIterator[ProcessorPart]) -> AsyncIterator[ProcessorPart]:
         """
-        Call method required by Processor base class.
-        Delegates to the process method.
+        Compatibility method to mirror previous Processor interface; delegates to process.
         """
         async for result in self.process(input_stream):
             yield result
@@ -400,7 +397,7 @@ class AuraPipeline(Processor):
         
         return results
     
-    async def _run_processor_safely(self, processor: Processor, input_part: ProcessorPart, processor_name: str) -> Optional[Dict[str, Any]]:
+    async def _run_processor_safely(self, processor, input_part: ProcessorPart, processor_name: str) -> Optional[Dict[str, Any]]:
         """Run a processor with circuit breaker protection, error handling and timeout."""
         # Get appropriate circuit breaker
         circuit_breaker = self._get_circuit_breaker_for_processor(processor_name)
@@ -434,9 +431,10 @@ class AuraPipeline(Processor):
             return self.metrics_circuit_breaker
         return None
     
-    async def _execute_processor(self, processor: Processor, input_part: ProcessorPart, processor_name: str) -> Optional[Dict[str, Any]]:
+    async def _execute_processor(self, processor, input_part: ProcessorPart, processor_name: str) -> Optional[Dict[str, Any]]:
         """Execute processor with timeout - used by circuit breaker."""
         results = []
+        # Both our processors expose .process(stream) already
         async for result_part in processor.process(streams.stream_content([input_part])):
             # Parse JSON result from processor
             if hasattr(result_part, 'text') and result_part.text:
@@ -453,7 +451,7 @@ class AuraPipeline(Processor):
         # Return the first (and typically only) result
         return results[0] if results else None
     
-    async def _run_processor_without_circuit_breaker(self, processor: Processor, input_part: ProcessorPart, processor_name: str) -> Optional[Dict[str, Any]]:
+    async def _run_processor_without_circuit_breaker(self, processor, input_part: ProcessorPart, processor_name: str) -> Optional[Dict[str, Any]]:
         """Original processor execution without circuit breaker (fallback)."""
         try:
             # Create timeout for processor

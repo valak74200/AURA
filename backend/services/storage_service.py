@@ -41,8 +41,8 @@ class StorageService:
                     started_at=session.started_at,
                     ended_at=session.ended_at,
                     duration=int(session.duration_seconds or 0),
-                    config=session.config.dict(),
-                    stats=session.state.dict()
+                    config=session.config.model_dump(),
+                    stats=session.state.model_dump()
                 )
                 
                 db.add(db_session)
@@ -239,10 +239,10 @@ class StorageService:
         for key, value in updates.items():
             if key == 'status' and hasattr(value, 'value'):
                 db_updates['status'] = value.value
-            elif key == 'config' and hasattr(value, 'dict'):
-                db_updates['config'] = value.dict()
-            elif key == 'state' and hasattr(value, 'dict'):
-                db_updates['stats'] = value.dict()
+            elif key == 'config' and hasattr(value, 'model_dump'):
+                db_updates['config'] = value.model_dump()
+            elif key == 'state' and hasattr(value, 'model_dump'):
+                db_updates['stats'] = value.model_dump()
             elif key == 'duration_seconds':
                 db_updates['duration'] = int(value) if value else 0
             else:

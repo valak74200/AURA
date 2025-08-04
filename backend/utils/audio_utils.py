@@ -85,29 +85,56 @@ class AudioBuffer:
         """
         Add audio chunk to buffer with automatic format conversion.
         
-        Args:
-            audio_data: Raw audio bytes
-            source_sample_rate: Original sample rate (if known)
-            
-        Returns:
-            bool: True if chunk added successfully
+        Strategy:
+        - For very first chunk(s), attempt full decoding via loaders to establish stream params.
+        - For subsequent chunks (no WAV header etc.), fall back to raw PCM append assuming 16kHz mono int16.
         """
         try:
-            # Convert bytes to numpy array
-            audio_array = self._bytes_to_array(audio_data, source_sample_rate)
-            
+            audio_array = None
+
+            # Heuristic: if chunk looks like a full file header (e.g., RIFF/WAVE, ID3, etc.), try full decode
+            looks_like_header = False
+            if len(audio_data) >= 12:
+                hdr = audio_data[:12]
+                looks_like_header = (hdr[:4] in (b'RIFF', b'RIFX') and hdr[8:12] == b'WAVE') or \
+                                    (hdr[:3] == b'ID3') or \
+                                    (hdr[:4] in (b'OggS', b'fLaC', b'FORM'))
+            # Also treat the first few chunks as header-bearing to lock in params
+            first_chunks = self.chunks_processed < 2
+
+            if looks_like_header or first_chunks:
+                try:
+                    audio_array, _ = load_audio_with_fallbacks(audio_data, self.sample_rate)
+                except Exception as e:
+                    logger.debug(f"Header/full decode path failed, will try raw PCM for streaming chunk: {e}")
+
+            # If decode failed or chunk does not look like header, treat as raw PCM (16-bit mono at target SR)
+            if audio_array is None:
+                try:
+                    # If the chunk length isn't aligned to 2 bytes (int16), trim the trailing byte(s)
+                    trimmed = audio_data
+                    remainder = len(trimmed) % 2
+                    if remainder != 0:
+                        trimmed = trimmed[:len(trimmed) - remainder]
+                    # Interpret as int16 PCM without header
+                    pcm = np.frombuffer(trimmed, dtype=np.int16).astype(np.float32) / 32768.0
+                    # Guard against empty buffers
+                    if pcm.size == 0:
+                        raise ValueError("PCM chunk empty after alignment")
+                    audio_array = pcm
+                except Exception as raw_err:
+                    # Last resort: go through loader (may still fail for arbitrary chunk)
+                    audio_array, _ = load_audio_with_fallbacks(audio_data, self.sample_rate)
+
             with self.lock:
-                # Add samples to buffer
-                for sample in audio_array:
-                    self.buffer.append(sample)
-                
+                # Append to circular buffer
+                self.buffer.extend(audio_array.tolist())
                 self.total_samples_added += len(audio_array)
                 self.chunks_processed += 1
-            
+
             return bool(True)
-            
         except Exception as e:
-            logger.error(f"Failed to add audio chunk: {e}")
+            logger.error(f"Failed to add audio chunk: {e}", exc_info=False)
             return bool(False)
     
     def get_chunk(self, size: Optional[int] = None) -> Optional[np.ndarray]:

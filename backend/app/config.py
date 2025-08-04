@@ -89,6 +89,11 @@ class Settings(BaseSettings):
         default="gemini-2.5-pro",  # Garder Pro si disponible
         description="Most capable Gemini model for advanced analysis"
     )
+# ElevenLabs TTS
+    elevenlabs_api_key: Optional[str] = Field(default=None, description="ElevenLabs API key for TTS")
+    elevenlabs_default_voice_id: str = Field(default="Rachel", description="Default ElevenLabs voice id")
+    elevenlabs_model: str = Field(default="eleven_multilingual_v2", description="ElevenLabs model id")
+    elevenlabs_sample_rate: int = Field(default=44100, description="Default output sample rate")
     
     # Thinking Budget Configuration (pour quand ce sera disponible)
     default_thinking_budget: int = Field(

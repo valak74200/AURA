@@ -31,7 +31,7 @@ async def register(
     try:
         user = await auth_service.create_user(db, user_create)
         logger.info("User registered successfully", extra={"user_id": str(user.id), "username": user.username})
-        return UserResponse.from_orm(user)
+        return UserResponse.model_validate(user)
     
     except ValidationError as e:
         logger.warning("Registration validation error", extra={"error": str(e)})
@@ -99,11 +99,11 @@ async def get_current_user_profile(
             await db.commit()
             await db.refresh(profile)
         
-        user_response = UserResponse.from_orm(current_user)
-        profile_response = UserProfileResponse.from_orm(profile)
+        user_response = UserResponse.model_validate(current_user)
+        profile_response = UserProfileResponse.model_validate(profile)
         
         return UserWithProfile(
-            **user_response.dict(),
+            **user_response.model_dump(),
             profile=profile_response
         )
     
@@ -125,7 +125,7 @@ async def update_current_user_profile(
     """
     try:
         # Mettre à jour les informations utilisateur
-        update_data = profile_update.dict(exclude_unset=True)
+        update_data = profile_update.model_dump(exclude_unset=True)
         
         # Séparer les champs utilisateur des champs profil
         user_fields = ["first_name", "last_name", "language"]
@@ -152,7 +152,7 @@ async def update_current_user_profile(
         await db.refresh(current_user)
         
         logger.info("User profile updated successfully", extra={"user_id": str(current_user.id)})
-        return UserResponse.from_orm(current_user)
+        return UserResponse.model_validate(current_user)
     
     except Exception as e:
         await db.rollback()
@@ -215,7 +215,7 @@ async def check_auth(current_user = Depends(get_current_user)):
     """
     Vérifier si l'utilisateur est authentifié
     """
-    return UserResponse.from_orm(current_user)
+    return UserResponse.model_validate(current_user)
 
 # Route publique pour vérifier la disponibilité d'un email/username
 @router.post("/check-availability")

@@ -6,7 +6,7 @@ Support PostgreSQL avec SQLAlchemy async
 import os
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import NullPool
 
 from utils.logging import get_logger
@@ -60,7 +60,7 @@ async def create_tables():
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables created successfully")
     except Exception as e:
-        logger.error("Failed to create database tables", error=str(e))
+        logger.error(f"Failed to create database tables: {e}")
         raise
 
 async def drop_tables():
@@ -70,7 +70,7 @@ async def drop_tables():
             await conn.run_sync(Base.metadata.drop_all)
         logger.info("Database tables dropped successfully")
     except Exception as e:
-        logger.error("Failed to drop database tables", error=str(e))
+        logger.error(f"Failed to drop database tables: {e}")
         raise
 
 async def check_database_connection():
@@ -82,5 +82,5 @@ async def check_database_connection():
         logger.info("Database connection successful")
         return True
     except Exception as e:
-        logger.error("Database connection failed", error=str(e))
-        return False 
+        logger.error(f"Database connection failed: {e}")
+        return False

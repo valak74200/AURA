@@ -3,6 +3,8 @@ AURA WebSocket Handlers
 
 Real-time WebSocket communication for presentation coaching with complete
 AuraPipeline integration for audio processing, AI feedback, and performance metrics.
+
+Also exposes /ws/tts for ElevenLabs TTS streaming proxy with viseme mapping.
 """
 
 import asyncio
@@ -12,9 +14,12 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List
 import base64
 import numpy as np
+import os
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from fastapi.routing import APIRoute
+from starlette.websockets import WebSocketState
 
 from models.session import PresentationSessionData, SessionConfig, SessionStatus, SessionType
 from models.feedback import RealTimeFeedback, FeedbackType, FeedbackSeverity
@@ -24,6 +29,12 @@ from utils.audio_utils import AudioBuffer
 from processors.aura_pipeline import AuraPipeline
 from genai_processors import ProcessorPart
 from genai_processors import streams
+
+# ElevenLabs WS proxy imports
+import websockets
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+# Use aiohttp for WS with Authorization headers support
+from aiohttp import ClientSession, WSMsgType, WSServerHandshakeError
 
 logger = get_logger(__name__)
 
@@ -42,6 +53,304 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
     
     # Connection manager for WebSocket sessions
     connection_manager = ConnectionManager(services)
+
+    # =========================================
+    # TTS: ElevenLabs streaming proxy endpoint
+    # =========================================
+    @router.websocket("/tts")
+    async def websocket_tts_endpoint(websocket: WebSocket):
+        """
+        WebSocket proxy to ElevenLabs Text-to-Speech streaming API.
+
+        Protocol (client -> server JSON unless noted):
+          - tts.start { voiceId?, model?, format?, sampleRate?, lang? }
+              -> server responds {type:"tts.start", ...defaults}
+          - tts.text { text } or tts.ssml { ssml }
+              -> server opens WS to ElevenLabs and streams:
+                   * binary audio frames (mp3) as WS binary messages
+                   * viseme events as JSON {type:"tts.viseme", time_ms, morph, weight}
+          - tts.cancel {}   -> server cancels current synthesis if in progress
+          - tts.end {}      -> server closes proxy and responds {type:"tts.end"}
+          - Heartbeat: every 20s, server sends {type:"ping"}
+
+        Notes:
+          - Binary audio is forwarded as-is for low latency.
+          - ElevenLabs auth via ELEVENLABS_API_KEY in environment/.env.
+        """
+        await websocket.accept()
+        # State
+        session = {
+            "voice_id": services.get("settings").elevenlabs_default_voice_id if "settings" in services else os.getenv("ELEVENLABS_DEFAULT_VOICE_ID", "Rachel"),
+            "model": services.get("settings").elevenlabs_model if "settings" in services else os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"),
+            "format": "mp3_44100_128",
+            "sample_rate": 44100,
+            "lang": "en",
+            "elevenlabs_ws": None,
+            "elevenlabs_task": None,
+            "cancel_flag": False
+        }
+
+        # Heartbeat task: ping every 20s
+        async def heartbeat_loop():
+            try:
+                while True:
+                    await asyncio.sleep(20)
+                    if websocket.client_state != WebSocketState.CONNECTED:
+                        break
+                    await websocket.send_json({"type": "ping"})
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.debug(f"/ws/tts heartbeat stopped: {e}")
+
+        heartbeat_task = asyncio.create_task(heartbeat_loop())
+
+        async def close_elevenlabs():
+            # Cancel the pump task first to stop reads, then close WS/session cleanly
+            task = session.get("elevenlabs_task")
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+            session["elevenlabs_task"] = None
+
+            ws = session.get("elevenlabs_ws")
+            if ws:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+            session["elevenlabs_ws"] = None
+
+            # Close aiohttp session if present
+            try:
+                s = session.pop("_aiohttp_session", None)
+                if s:
+                    await s.close()
+            except Exception:
+                pass
+
+        async def morph_map(phoneme: str) -> str:
+            """
+            Map ElevenLabs phoneme/viseme to normalized morph target.
+            Simple default mapping; refine server-side as needed.
+            """
+            if not phoneme:
+                return "defaultClose"
+            p = phoneme.upper()
+            vowels = {"AA":"AA","AE":"AE","AH":"AH","AO":"AO","AW":"AW","AY":"AY",
+                      "EH":"EH","ER":"ER","EY":"EY","IH":"IH","IY":"IY","OW":"OW","OY":"OY","UH":"UH","UW":"UW"}
+            if p in vowels:
+                return vowels[p]
+            if p in {"B","P","M"}:
+                return "M"
+            if p in {"F","V"}:
+                return "F"
+            if p in {"S","Z"}:
+                return "S"
+            if p in {"SH","ZH","CH","JH"}:
+                return "SH"
+            if p in {"D","T","K","G"}:
+                return "TH"  # soft close proxy
+            return "defaultClose"
+
+        async def open_elevenlabs_stream(text: str = None, ssml: str = None):
+            """
+            Open a streaming connection to ElevenLabs and forward data to client.
+            """
+            api_key = os.getenv("ELEVENLABS_API_KEY") or getattr(services.get("settings", None), "elevenlabs_api_key", None)
+            if not api_key:
+                await websocket.send_json({"type": "tts.error", "code": "NO_API_KEY", "message": "Missing ELEVENLABS_API_KEY"})
+                return
+
+            voice_id = session["voice_id"]
+            model = session["model"]
+            output_format = session["format"]
+
+            # ElevenLabs realtime TTS WS endpoint (stream-input, voice_id in path)
+            # Auth via Authorization: Bearer <API_KEY> in handshake headers
+            url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input"
+
+            try:
+                # Use aiohttp to pass Authorization header during WS handshake
+                aiohttp_session = ClientSession()
+                # Keep reference to close later with the WS
+                session["_aiohttp_session"] = aiohttp_session
+                el_ws = await aiohttp_session.ws_connect(
+                    url,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    autoclose=False,
+                    autoping=True,
+                    max_msg_size=2 * 1024 * 1024
+                )
+                session["elevenlabs_ws"] = el_ws
+            except WSServerHandshakeError as e:
+                # Surface HTTP status for diagnostics (401/403)
+                await websocket.send_json({
+                    "type": "tts.error",
+                    "code": "CONNECT_FAILED",
+                    "status": getattr(e, 'status', None),
+                    "message": f"Handshake failed: {str(e)}"
+                })
+                return
+            except Exception as e:
+                await websocket.send_json({"type": "tts.error", "code": "CONNECT_FAILED", "message": str(e)})
+                return
+
+            async def pump_from_elevenlabs():
+                try:
+                    # For stream-input, after handshake with Authorization header,
+                    # send a "start" message containing synthesis params and content.
+                    start_payload = {
+                        "type": "start",
+                        "model_id": model,
+                        "output_format": output_format,
+                        "optimize_streaming_latency": 3,
+                        "voice_settings": {"stability": 0.5, "similarity_boost": 0.5}
+                    }
+                    if ssml:
+                        start_payload["ssml"] = ssml
+                    elif text:
+                        start_payload["text"] = text
+                    await el_ws.send_json(start_payload)
+
+                    # Read frames from ElevenLabs (aiohttp WS API)
+                    while True:
+                        msg = await el_ws.receive()
+                        if msg.type == WSMsgType.BINARY:
+                            if websocket.client_state == WebSocketState.CONNECTED:
+                                await websocket.send_bytes(msg.data)
+                            else:
+                                break
+                        elif msg.type == WSMsgType.TEXT:
+                            try:
+                                data = json.loads(msg.data)
+                            except Exception:
+                                await websocket.send_json({"type": "tts.debug", "raw": str(msg.data)})
+                                continue
+                            event_type = data.get("type") or data.get("event") or ""
+                            if "viseme" in event_type.lower() or "phoneme" in event_type.lower() or "timestamp" in data:
+                                time_ms = int(float(data.get("offset", data.get("timestamp", 0))) * 1000) if isinstance(data.get("timestamp"), float) else data.get("time_ms", 0)
+                                phoneme = data.get("phoneme") or data.get("viseme") or data.get("morph") or ""
+                                weight = float(data.get("weight", 1.0))
+                                morph = await morph_map(phoneme)
+                                await websocket.send_json({"type": "tts.viseme","time_ms": time_ms,"morph": morph,"weight": weight})
+                            elif data.get("isFinal") or data.get("final"):
+                                await websocket.send_json({"type": "tts.end"})
+                            else:
+                                await websocket.send_json({"type": "tts.meta", "data": data})
+                                # Diagnostics: explicit unauthorized
+                                try:
+                                    code = int(data.get("code", 0))
+                                except Exception:
+                                    code = 0
+                                if code in (401, 403) or "unauthorized" in str(data).lower():
+                                    await websocket.send_json({"type": "tts.error", "code": "UNAUTHORIZED", "message": "ElevenLabs authentication failed (401/403). Check ELEVENLABS_API_KEY and account access."})
+                                    break
+                        elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED):
+                            break
+                        elif msg.type == WSMsgType.ERROR:
+                            await websocket.send_json({"type": "tts.error", "code": "STREAM_ERROR", "message": str(el_ws.exception())})
+                            break
+
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json({"type": "tts.error", "code": "STREAM_ERROR", "message": str(e)})
+                finally:
+                    # Ensure WS is closed; ignore CancelledError from underlying reader during shutdown
+                    try:
+                        await el_ws.close()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
+                    # Ensure aiohttp session is closed
+                    try:
+                        s = session.pop("_aiohttp_session", None)
+                        if s:
+                            await s.close()
+                    except Exception:
+                        pass
+
+            session["elevenlabs_task"] = asyncio.create_task(pump_from_elevenlabs())
+
+        try:
+            # Ack service ready
+            await websocket.send_json({
+                "type": "tts.ready",
+                "defaults": {
+                    "voiceId": session["voice_id"],
+                    "model": session["model"],
+                    "format": session["format"],
+                    "sampleRate": session["sample_rate"],
+                    "lang": session["lang"]
+                }
+            })
+
+            while True:
+                # Allow both text and binary? Control plane is JSON here.
+                raw = await websocket.receive_text()
+                msg = json.loads(raw)
+                mtype = msg.get("type")
+
+                if mtype == "tts.start":
+                    session["voice_id"] = msg.get("voiceId", session["voice_id"])
+                    session["model"] = msg.get("model", session["model"])
+                    session["format"] = msg.get("format", session["format"])
+                    session["sample_rate"] = int(msg.get("sampleRate", session["sample_rate"]))
+                    session["lang"] = msg.get("lang", session["lang"])
+                    await websocket.send_json({
+                        "type": "tts.start",
+                        "voiceId": session["voice_id"],
+                        "model": session["model"],
+                        "format": session["format"],
+                        "sampleRate": session["sample_rate"],
+                        "lang": session["lang"]
+                    })
+
+                elif mtype in ("tts.text", "tts.ssml"):
+                    text = msg.get("text") if mtype == "tts.text" else None
+                    ssml = msg.get("ssml") if mtype == "tts.ssml" else None
+
+                    # If another stream is active, close it first
+                    await close_elevenlabs()
+                    session["cancel_flag"] = False
+                    await open_elevenlabs_stream(text=text, ssml=ssml)
+
+                elif mtype == "tts.cancel":
+                    session["cancel_flag"] = True
+                    await close_elevenlabs()
+                    await websocket.send_json({"type": "tts.canceled"})
+
+                elif mtype == "tts.end":
+                    await close_elevenlabs()
+                    await websocket.send_json({"type": "tts.end"})
+                    break
+
+                else:
+                    await websocket.send_json({"type": "tts.error", "code": "UNKNOWN_TYPE", "message": f"Unknown message type: {mtype}"})
+
+        except WebSocketDisconnect:
+            logger.info("/ws/tts client disconnected")
+        except Exception as e:
+            logger.error(f"/ws/tts error: {e}", exc_info=True)
+            try:
+                await websocket.send_json({"type": "tts.error", "code": "SERVER_ERROR", "message": str(e)})
+            except Exception:
+                pass
+        finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except Exception:
+                pass
+            await close_elevenlabs()
     
     @router.websocket("/session/{session_id}")
     async def websocket_session_endpoint(
