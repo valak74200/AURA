@@ -1,12 +1,12 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Mic, 
-  BarChart3, 
-  Users, 
-  Zap, 
-  CheckCircle, 
+import {
+  Mic,
+  BarChart3,
+  Users,
+  Zap,
+  CheckCircle,
   Star,
   ArrowRight,
   Play,
@@ -18,6 +18,7 @@ import { Button } from '../components/ui';
 import Container from '../components/ui/Container';
 import AnimatedCard from '../components/ui/AnimatedCard';
 import GradientText from '../components/ui/GradientText';
+import DidAgent from '../components/DidAgent';
 
 const LandingPage: React.FC = () => {
   const navigate = useNavigate();
@@ -66,6 +67,28 @@ const LandingPage: React.FC = () => {
     }
   ];
 
+{/* D-ID Agent Demo Section */}
+  <section className="py-20 bg-white">
+    <Container>
+      <div className="text-center mb-8">
+        <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-2">
+          Démo Assistant Vidéo
+        </h2>
+        <p className="text-gray-600">
+          Interagissez avec notre agent alimenté par D-ID directement depuis la page d’accueil.
+        </p>
+      </div>
+      {/* Composant DidAgent monté sur la Landing */}
+      {/* Assurez-vous d'avoir configuré VITE_DID_CLIENT_KEY dans votre fichier .env */}
+      {/* Exemple: VITE_DID_CLIENT_KEY=Z29vZ2xlLW9hdXRoMnwxMTYwNjgyMTQzODM1NjE0MDIwMjM6RE1uaDhWVEhNd3pBRWFGc3YwS1RN */}
+      <div className="max-w-xl mx-auto">
+        {/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */}
+        {/* @ts-ignore - composant local */}
+        {/* import ci-dessous ajouté plus haut */}
+        <DidAgent containerId="did-agent-landing" />
+      </div>
+    </Container>
+  </section>
   return (
     <div className="min-h-screen bg-white">
       {/* Navigation */}

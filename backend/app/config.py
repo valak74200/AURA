@@ -43,6 +43,29 @@ class Settings(BaseSettings):
     redis_max_connections: int = Field(default=20, description="Maximum Redis connections in pool")
     redis_socket_timeout: int = Field(default=5, description="Redis socket timeout in seconds")
     redis_socket_connect_timeout: int = Field(default=5, description="Redis connection timeout in seconds")
+
+    # D-ID Realtime Avatar (REST/WS)
+    did_api_key: Optional[str] = Field(default=None, description="D-ID API key")
+    did_api_base: str = Field(default="https://api.d-id.com", description="D-ID REST API base URL")
+    did_realtime_ws_url: Optional[str] = Field(default=None, description="Optional override for D-ID realtime WS URL")
+    avatar_default_id: str = Field(default="default-live-portrait-1", description="Default D-ID avatar ID")
+    avatar_default_resolution: str = Field(default="720p", description="Default avatar video resolution")
+    avatar_default_backdrop: str = Field(default="bureau", description="Default avatar backdrop preset")
+    
+    # D-ID Agents Streams (REST/WS) - pivot architecture
+    did_agents_api_key: Optional[str] = Field(default=None, description="D-ID Agents API key (can reuse DID_API_KEY)")
+    did_agents_api_base: str = Field(default="https://api.d-id.com", description="D-ID Agents REST API base")
+    did_agents_ws_base: Optional[str] = Field(default=None, description="Optional override for D-ID Agents WS base")
+    
+    # Agent defaults and budget controls
+    agent_conversation_mode: str = Field(default="hybrid", description="Agent conversation mode: hybrid|factual|creative")
+    agent_creativity_level: float = Field(default=0.5, description="Creativity slider 0.0-1.0")
+    agent_llm_model: str = Field(default="gpt-4o", description="Default LLM model for agent")
+    agent_voice_id: str = Field(default="female_neutral_fr", description="Default agent voice preset")
+    agent_default_knowledge: str = Field(default="", description="Inline default knowledge text")
+    agent_max_session_duration: int = Field(default=300, description="Max agent streaming session duration (seconds)")
+    agent_max_turns_per_session: int = Field(default=50, description="Max user prompts per session")
+    agent_session_timeout: int = Field(default=30, description="Idle timeout for agent WS (seconds)")
     
     # Cache Settings
     cache_default_ttl: int = Field(default=3600, description="Default cache TTL in seconds")
@@ -89,7 +112,7 @@ class Settings(BaseSettings):
         default="gemini-2.5-pro",  # Garder Pro si disponible
         description="Most capable Gemini model for advanced analysis"
     )
-# ElevenLabs TTS
+    # ElevenLabs TTS
     elevenlabs_api_key: Optional[str] = Field(default=None, description="ElevenLabs API key for TTS")
     elevenlabs_default_voice_id: str = Field(default="Rachel", description="Default ElevenLabs voice id")
     elevenlabs_model: str = Field(default="eleven_multilingual_v2", description="ElevenLabs model id")

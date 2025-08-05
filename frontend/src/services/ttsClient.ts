@@ -49,6 +49,9 @@ export class TtsClient {
   private ws: WebSocket | null = null;
   private sawReady = false;
   private readyTimeoutId: number | null = null;
+  // Evite les faux positifs CONNECT_FAILED lors d’une fermeture volontaire (cleanup/toggle)
+  private intentionalClose = false;
+  private lastConnectAt = 0;
 
   private onAudioChunkHandlers: ((chunk: ArrayBuffer) => void)[] = [];
   private onVisemeHandlers: ((v: VisemeEvent) => void)[] = [];
@@ -62,17 +65,52 @@ export class TtsClient {
   constructor(url = (import.meta as any)?.env?.VITE_BACKEND_WS_URL || "ws://127.0.0.1:8000/ws/tts") {
     this.url = url;
     this.log(`init: url=${this.url}`);
+    // Ajout d'un handler global d'unload pour éviter des close() pendant CONNECTING qui polluent la console
+    try {
+      window.addEventListener("beforeunload", () => {
+        if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+          this.intentionalClose = true;
+          try {
+            this.ws.onopen = null as any;
+            this.ws.onclose = null as any;
+            this.ws.onerror = null as any;
+            this.ws.onmessage = null as any;
+          } catch {}
+          // Ne pas appeler close() ici pour éviter le warning
+          this.ws = null;
+        }
+      });
+    } catch {}
   }
 
   private log(line: string) {
     const ts = new Date().toISOString();
     const msg = `[TtsClient ${ts}] ${line}`;
-    // console log for devtools
-    try { // avoid crashing in unusual envs
+    try {
       // eslint-disable-next-line no-console
       console.debug(msg);
     } catch {}
     this.onLogHandlers.forEach((h) => h(msg));
+  }
+
+  private logClose(ev: CloseEvent) {
+    this.log(
+      `CLOSE: code=${ev.code} reason=${ev.reason || ""} wasClean=${ev.wasClean} ` +
+      `intentional=${this.intentionalClose} sawReady=${this.sawReady} ` +
+      `readyState=${this.ws?.readyState} sinceConnect=${Date.now() - this.lastConnectAt}ms`
+    );
+  }
+
+  private logErrorEvent(e: Event) {
+    const anyE: any = e || {};
+    const parts = [
+      `ERROR: type=${anyE?.type || "error"}`,
+      anyE?.message ? `message=${String(anyE.message)}` : "",
+      `url=${this.url}`,
+      `readyState=${this.ws?.readyState}`,
+      `sinceConnect=${Date.now() - this.lastConnectAt}ms`,
+    ].filter(Boolean);
+    this.log(parts.join(" "));
   }
 
   async connect(readyTimeoutMs = 5000): Promise<void> {
@@ -80,8 +118,11 @@ export class TtsClient {
       this.log(`connect: reuse existing ws state=${this.ws.readyState}`);
       return;
     }
+    this.intentionalClose = false;
+    this.lastConnectAt = Date.now();
     this.log(`connect: creating WebSocket to ${this.url} with readyTimeoutMs=${readyTimeoutMs}`);
     this.ws = new WebSocket(this.url);
+    this.log(`connect: ws created, readyState=${this.ws.readyState}`);
 
     await new Promise<void>((resolve, reject) => {
       if (!this.ws) return reject(new Error("WS not created"));
@@ -89,13 +130,18 @@ export class TtsClient {
       this.sawReady = false;
 
       this.ws.onopen = () => {
-        this.log("onopen");
+        this.log(`onopen: state=${this.ws?.readyState}`);
         if (this.readyTimeoutId) {
           clearTimeout(this.readyTimeoutId);
           this.readyTimeoutId = null;
         }
         this.readyTimeoutId = window.setTimeout(() => {
           if (!this.sawReady) {
+            // Ne pas crier si la fermeture a été intentionnelle entre-temps
+            if (this.intentionalClose) {
+              this.log("ready timeout ignored (intentionalClose=true)");
+              return;
+            }
             const err: TtsError = { type: "tts.error", code: "READY_TIMEOUT", message: "No tts.ready within timeout" };
             this.log("ready timeout fired without tts.ready");
             this.onErrorHandlers.forEach((h) => h(err));
@@ -105,30 +151,54 @@ export class TtsClient {
         resolve();
       };
 
-      this.ws.onerror = (e) => {
-        this.log(`onerror: ${String((e as any)?.message || e)}`);
-        reject(e as any);
+      // Ne rejette pas la promesse ici pour éviter "WS connect error: [object Event]"
+      this.ws.onerror = (e: Event) => {
+        this.logErrorEvent(e);
+        // on laisse onclose produire l'erreur normalisée si besoin
       };
 
       this.ws.onclose = (ev) => {
-        this.log(`onclose: code=${ev.code} reason=${ev.reason || ""} wasClean=${ev.wasClean}`);
+        this.logClose(ev);
+        // Si fermeture intentionnelle ou normale 1000, ne rien reporter
+        if (this.intentionalClose || ev.code === 1000) {
+          this.log("onclose: ignored (intentional or normal close)");
+          return;
+        }
+        // Si fermeture très tôt après création (ex: cleanup immédiat), ignorer pour éviter bruit
+        const since = Date.now() - this.lastConnectAt;
+        if (!this.sawReady && since < 100) {
+          this.log(`onclose: ignored early close within ${since}ms after connect (likely cleanup)`);
+          return;
+        }
+        // Si fermeture avant ready, normaliser le message
         if (!this.sawReady && (ev.code === 1006 || ev.code === 1008)) {
           const err: TtsError = {
             type: "tts.error",
             code: ev.code === 1008 ? "UNAUTHORIZED" : "CONNECT_FAILED",
             message: ev.reason || (ev.code === 1008 ? "Policy violation/Unauthorized" : "WS closed before ready"),
           };
+          this.log(`emit error: ${JSON.stringify(err)}`);
           this.onErrorHandlers.forEach((h) => h(err));
+          return;
         }
+        // Codes autres: reporter générique pour information
+        const err: TtsError = {
+          type: "tts.error",
+          code: "CONNECT_FAILED",
+          message: `Closed code=${ev.code} reason=${ev.reason || ""} before ready=${!this.sawReady}`,
+        };
+        this.log(`emit error (generic): ${JSON.stringify(err)}`);
+        this.onErrorHandlers.forEach((h) => h(err));
       };
 
       // First message handler: specifically watch for tts.ready quickly
       this.ws.onmessage = (evt) => {
         const isText = typeof evt.data === "string";
         if (isText) {
-          this.log(`onmessage(pre-route): text=${String(evt.data).slice(0, 160)}`);
+          this.log(`onmessage(pre-route): text(len=${String(evt.data).length}) ${String(evt.data).slice(0, 160)}`);
           try {
             const payload = JSON.parse(evt.data);
+            this.log(`onmessage(pre-route): parsed type=${payload?.type}`);
             if (payload?.type === "tts.ready") {
               this.sawReady = true;
               if (this.readyTimeoutId) {
@@ -147,6 +217,7 @@ export class TtsClient {
         }
         if (!this.ws) return;
         this.ws.onmessage = (event) => this.routeMessage(event);
+        this.log("onmessage(pre-route): switched to routeMessage");
       };
     });
   }
@@ -160,10 +231,11 @@ export class TtsClient {
     }
     if (typeof data === "string") {
       // preview log
-      this.log(`routeMessage: text=${data.slice(0, 200)}`);
+      this.log(`routeMessage: text(len=${data.length}) ${data.slice(0, 200)}`);
       try {
         const msg = JSON.parse(data);
         const type = msg?.type;
+        this.log(`routeMessage: parsed type=${type}`);
         switch (type) {
           case "tts.start":
             this.onStartAckHandlers.forEach((h) => h(msg));
@@ -263,19 +335,37 @@ export class TtsClient {
   }
 
   async disconnect(): Promise<void> {
-    if (this.ws) {
-      try {
-        this.log("disconnect: closing ws");
-        this.ws.close();
-      } catch {
-        // ignore
+    const ws = this.ws;
+    if (ws) {
+      this.intentionalClose = true;
+
+      // Désarmer le timeout de readiness immédiatement
+      if (this.readyTimeoutId) {
+        clearTimeout(this.readyTimeoutId);
+        this.readyTimeoutId = null;
       }
+
+      // Détacher les handlers pour éviter les callbacks tardifs
+      try {
+        ws.onopen = null as any;
+        ws.onclose = null as any;
+        ws.onerror = null as any;
+        ws.onmessage = null as any;
+      } catch {}
+
+      // Utiliser try/catch silencieux pour éviter tout warning console
+      try {
+        // Si CONNECTING, on ne ferme pas explicitement pour éviter le warning navigateur,
+        // on laisse le GC/fermeture naturelle se faire après nullification des handlers.
+        if (ws.readyState !== WebSocket.CONNECTING) {
+          ws.close(1000, "intentional");
+        }
+      } catch {}
+
+      // Déréférencer la socket pour laisser le navigateur la finaliser sans log
       this.ws = null;
     }
-    if (this.readyTimeoutId) {
-      clearTimeout(this.readyTimeoutId);
-      this.readyTimeoutId = null;
-    }
+
     this.sawReady = false;
   }
 

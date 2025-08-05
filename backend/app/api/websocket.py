@@ -249,16 +249,14 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
                 logger.debug("/ws/tts normalized output_format to default mp3_44100_128")
 
             # ElevenLabs realtime TTS WS endpoint (stream-input, voice_id in path)
-            # Auth via Authorization: Bearer <API_KEY> in handshake headers
+            # NO auth in URL or headers; auth is sent in the FIRST JSON message (xi_api_key) after connect
             url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input"
-            # Mask API key length only, never log the value
             masked = f"***len={len(api_key)}" if api_key else "***none"
             logger.info(
                 "/ws/tts opening ElevenLabs stream",
-                extra={"voice_id": voice_id, "model": model, "format": output_format, "auth_header": "Bearer <redacted>", "api_key": masked}
+                extra={"voice_id": voice_id, "model": model, "format": output_format, "auth": "first_message_xi_api_key", "api_key": masked}
             )
             await websocket.send_json({"type": "tts.meta", "data": {"stage": "connect_upstream", "endpoint": url}})
-            # Extra defensive: ensure we never pass an empty Authorization header
             if not api_key:
                 await websocket.send_json({
                     "type": "tts.error",
@@ -269,18 +267,17 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
                 return
 
             try:
-                # Use aiohttp to pass Authorization header during WS handshake
+                # Connect without auth in URL or headers; auth will be included in first JSON message
                 timeout = aiohttp.ClientTimeout(total=30)
                 aiohttp_session = ClientSession(timeout=timeout)
-                # Keep reference to close later with the WS
                 session["_aiohttp_session"] = aiohttp_session
-                # Build headers exactly as ElevenLabs expects
+
                 headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Accept": "application/json"  # TEXT control frames are JSON
+                    # Upstream expects JSON control frames; no auth header here
+                    "Accept": "application/json"
                 }
-                # Extra diagnostics before connect (without leaking key)
-                logger.debug("/ws/tts connecting to ElevenLabs", extra={"url": url, "headers_present": list(headers.keys()), "auth_header_value_preview": "Bearer <redacted>"})
+
+                logger.debug("/ws/tts connecting to ElevenLabs", extra={"url": url, "headers_present": list(headers.keys())})
                 el_ws = await aiohttp_session.ws_connect(
                     url,
                     headers=headers,
@@ -289,30 +286,52 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
                     max_msg_size=2 * 1024 * 1024
                 )
                 session["elevenlabs_ws"] = el_ws
-                logger.info("/ws/tts ElevenLabs handshake OK")
+                logger.info("/ws/tts ElevenLabs handshake OK (no auth in URL)")
                 await websocket.send_json({"type": "tts.meta", "data": {"stage": "upstream_connected"}})
             except WSServerHandshakeError as e:
                 status = getattr(e, 'status', None)
-                diag = {
-                    "status": status,
-                    "reason": str(e),
-                }
-                # When handshake fails (401/403), surface a stronger auth hint
+                text = getattr(e, 'message', str(e))
                 await websocket.send_json({
                     "type": "tts.error",
                     "code": "CONNECT_FAILED",
                     "status": status,
-                    "message": f"Handshake failed: {str(e)}",
-                    "diagnostic": {**diag, "hint": "Check ELEVENLABS_API_KEY value and ensure Authorization: Bearer <key> is accepted by ElevenLabs"}
+                    "message": "WS handshake failed before ready",
+                    "diagnostic": {
+                        "stage": "handshake",
+                        "status": status,
+                        "error": text,
+                        "hint": "Ensure upstream WS endpoint is reachable and not blocked by network/firewall/SSL. No auth in URL; xi_api_key is sent in first 'start' message."
+                    }
                 })
-                logger.error("/ws/tts ElevenLabs handshake failed", extra=diag)
+                logger.error("/ws/tts ElevenLabs handshake failed", extra={"status": status, "error": text})
                 return
             except Exception as e:
-                await websocket.send_json({"type": "tts.error", "code": "CONNECT_FAILED", "message": str(e), "diag": {"stage": "connect", "error": str(e)}})
+                await websocket.send_json({
+                    "type": "tts.error",
+                    "code": "CONNECT_FAILED",
+                    "message": "WS closed before ready",
+                    "diag": {
+                        "stage": "connect",
+                        "error": str(e),
+                        "hint": "Common causes: corporate proxy/SSL MITM, DNS/IPv6 issues, or upstream downtime. Try IPv4-only, verify SSL trust, or test /api/v1/debug/tts-auth."
+                    }
+                })
                 logger.error("/ws/tts ElevenLabs connect error", extra={"error": str(e)})
                 return
 
             async def pump_from_elevenlabs():
+                # If upstream closed quickly, surface a clearer diagnostic to the client UI
+                if session.get("elevenlabs_ws") is None or session["elevenlabs_ws"].closed:
+                    await websocket.send_json({
+                        "type": "tts.error",
+                        "code": "CONNECT_FAILED",
+                        "message": "Upstream WS closed before auth/start",
+                        "diag": {
+                            "stage": "pre_start",
+                            "hint": "Upstream connection not established. Check network reachability and SSL; then retry."
+                        }
+                    })
+                    return
                 bytes_forwarded = 0
                 text_len = len(text) if text else 0
                 ssml_len = len(ssml) if ssml else 0
@@ -328,13 +347,17 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
                     # For plain TTS-from-text/ssml on stream-input, they still expect a "generate" signal
                     # after start. Some accounts/models also require an explicit "text" message type.
                     #
-                    # Send start
+                    # Send first auth/priming message per ElevenLabs stream-input:
+                    # Include xi_api_key and a mandatory text field (space when empty)
                     start_payload = {
                         "type": "start",
                         "model_id": "eleven_multilingual_v2",
                         "output_format": "mp3_44100_128",
                         "optimize_streaming_latency": 3,
-                        "voice_settings": {"stability": 0.5, "similarity_boost": 0.5}
+                        "voice_settings": {"stability": 0.5, "similarity_boost": 0.5},
+                        "xi_api_key": api_key,
+                        # Some implementations require a priming text even if empty → send a single space
+                        "text": " "
                     }
                     # Some ElevenLabs accounts/models require voice_id AND 'generation_config'
                     # Include explicit voice_id and a minimal generation_config to avoid 1008 errors.
@@ -352,12 +375,11 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
                     await el_ws.send_json(start_payload)
 
                     # Per ElevenLabs stream-input docs:
-                    # 1) start
+                    # 1) start (with xi_api_key and priming text)
                     # 2) add_text (text or ssml)
                     # 3) input_audio_buffer.commit
                     # 4) generate
-                    # Log we are following the multi-stream-input sequence
-                    await websocket.send_json({"type": "tts.meta", "data": {"sequence": "start->add_text->commit->generate"}})
+                    await websocket.send_json({"type": "tts.meta", "data": {"sequence": "start(xi_api_key)->add_text->commit->generate"}})
                     if ssml:
                         await el_ws.send_json({"type": "add_text", "ssml": ssml})
                         logger.debug("/ws/tts sent add_text (ssml)", extra={"ssml_len": ssml_len})
@@ -367,9 +389,10 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
                         logger.debug("/ws/tts sent add_text (text)", extra={"text_len": text_len})
                         await websocket.send_json({"type": "tts.meta", "data": {"stage": "add_text_sent", "mode": "text", "len": text_len}})
                     else:
-                        # Even if inline start included content, still require an explicit add_text for some accounts
-                        await websocket.send_json({"type": "tts.error", "code": "NO_CONTENT", "message": "No text/ssml provided", "diag": {"stage": "add_text"}})
-                        return
+                        # If client provided nothing, we still initialized with a priming " " in start
+                        # but some accounts require explicit add_text; send minimal filler to proceed.
+                        await el_ws.send_json({"type": "add_text", "text": " "})
+                        await websocket.send_json({"type": "tts.meta", "data": {"stage": "add_text_sent", "mode": "text", "len": 1}})
 
                     await el_ws.send_json({"type": "input_audio_buffer.commit"})
                     logger.debug("/ws/tts sent input_audio_buffer.commit")
@@ -397,54 +420,87 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
                                 logger.info("/ws/tts client disconnected while forwarding audio")
                                 break
                         elif msg.type == WSMsgType.TEXT:
-                            # Log a compact line and forward normalized info
                             raw = msg.data
+                            # Some implementations send base64 audio chunks inside TEXT frames (key "audio")
                             try:
                                 data = json.loads(raw)
                             except Exception:
                                 logger.debug("/ws/tts received non-JSON TEXT from ElevenLabs", extra={"len": len(raw)})
                                 await websocket.send_json({"type": "tts.meta", "data": {"raw": str(raw)[:500]}})
                                 continue
+
+                            # 1) If there is 'audio' key with base64 payload, forward it as binary to the client
+                            audio_b64 = data.get("audio")
+                            if isinstance(audio_b64, str) and audio_b64:
+                                try:
+                                    import base64 as _b64
+                                    audio_bytes = _b64.b64decode(audio_b64, validate=False)
+                                    if audio_bytes:
+                                        bytes_forwarded += len(audio_bytes)
+                                        if websocket.client_state == WebSocketState.CONNECTED:
+                                            await websocket.send_bytes(audio_bytes)
+                                        else:
+                                            logger.info("/ws/tts client disconnected while forwarding TEXT-embedded audio")
+                                            break
+                                    # Mirror minimal meta for debugging
+                                    await websocket.send_json({"type": "tts.meta", "data": {"upstream_text": {"audio": "<base64:len>", "isFinal": data.get("isFinal")}}})
+                                except Exception as dec_err:
+                                    logger.debug("/ws/tts failed to decode TEXT-embedded audio", extra={"error": str(dec_err)})
+
+                            # 2) Forward upstream TEXT as meta mirror (without large base64) for diagnostics
+                            mirror = dict(data)
+                            if "audio" in mirror:
+                                mirror["audio"] = "<base64:omitted>"
+                            await websocket.send_json({"type": "tts.meta", "data": {"upstream_text": mirror}})
+
+                            # 3) Handle viseme/phoneme events
                             event_type = (data.get("type") or data.get("event") or "").lower()
-                            # Forward the upstream TEXT exactly for better diagnostics as meta mirror
-                            await websocket.send_json({"type": "tts.meta", "data": {"upstream_text": data}})
-                            logger.debug("/ws/tts TEXT event from ElevenLabs", extra={"event_type": event_type})
                             if "viseme" in event_type or "phoneme" in event_type or "timestamp" in data:
-                                time_ms = int(float(data.get("offset", data.get("timestamp", 0))) * 1000) if isinstance(data.get("timestamp"), float) else data.get("time_ms", 0)
+                                time_ms = int(float(data.get("offset", data.get("timestamp", 0))) * 1000) if isinstance(data.get("timestamp"), (float, int)) else data.get("time_ms", 0)
                                 phoneme = data.get("phoneme") or data.get("viseme") or data.get("morph") or ""
-                                weight = float(data.get("weight", 1.0))
+                                try:
+                                    weight = float(data.get("weight", 1.0))
+                                except Exception:
+                                    weight = 1.0
                                 morph = await morph_map(phoneme)
                                 await websocket.send_json({"type": "tts.viseme","time_ms": time_ms,"morph": morph,"weight": weight})
-                            elif data.get("isFinal") or data.get("final") or event_type in ("done", "completed", "generation.completed"):
+
+                            # 4) Handle final/completed events
+                            if data.get("isFinal") or data.get("final") or event_type in ("done", "completed", "generation.completed"):
                                 await websocket.send_json({"type": "tts.end"})
                                 logger.info("/ws/tts ElevenLabs final event received, ending stream", extra={"total_bytes": bytes_forwarded})
                                 break
-                            else:
-                                await websocket.send_json({"type": "tts.meta", "data": data})
-                                # Diagnostics: explicit unauthorized / parameter issues
+
+                            # 5) Auth and parameter diagnostics
+                            try:
+                                code = int(data.get("code", 0))
+                            except Exception:
+                                code = 0
+                            msg_lower = str(data).lower()
+                            if code in (401, 403, 1008) or "unauthorized" in msg_lower or "invalid_authorization_header" in msg_lower or "neither xi-api-key nor authorization header were found" in msg_lower:
+                                await websocket.send_json({
+                                    "type": "tts.error",
+                                    "code": "UNAUTHORIZED",
+                                    "message": "ElevenLabs WS auth failed. Ensure ELEVENLABS_API_KEY is valid and included as 'xi_api_key' in the initial 'start' message (not URL/header)."
+                                })
                                 try:
-                                    code = int(data.get("code", 0))
+                                    await websocket.send_json({"type": "tts.end"})
                                 except Exception:
-                                    code = 0
-                                msg_lower = str(data).lower()
-                                if code in (401, 403, 1008) or "unauthorized" in msg_lower or "invalid_authorization_header" in msg_lower:
-                                    await websocket.send_json({
-                                        "type": "tts.error",
-                                        "code": "UNAUTHORIZED",
-                                        "message": "ElevenLabs authentication failed (invalid/401/403). Verify ELEVENLABS_API_KEY and that WS uses Authorization: Bearer <key>."
-                                    })
-                                    # Emit immediate end to let client release MSE gracefully
-                                    try:
-                                        await websocket.send_json({"type": "tts.end"})
-                                    except Exception:
-                                        pass
-                                    logger.error("/ws/tts UNAUTHORIZED from ElevenLabs", extra={"code": code, "details": data})
-                                    break
-                                # Extra diagnostics for common param issues (not auth):
-                                if "voice_not_found" in msg_lower or "model" in msg_lower and "not" in msg_lower:
-                                    await websocket.send_json({"type": "tts.meta", "data": {"warning": "Parameter issue reported by upstream", "details": data}})
+                                    pass
+                                logger.error("/ws/tts UNAUTHORIZED from ElevenLabs", extra={"code": code, "details": data})
+                                break
+
+                            if "voice_not_found" in msg_lower or ("model" in msg_lower and "not" in msg_lower):
+                                await websocket.send_json({"type": "tts.meta", "data": {"warning": "Parameter issue reported by upstream", "details": data}})
                         elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED):
                             logger.info("/ws/tts ElevenLabs WS closed", extra={"total_bytes": bytes_forwarded})
+                            if bytes_forwarded == 0:
+                                await websocket.send_json({
+                                    "type": "tts.error",
+                                    "code": "UPSTREAM_CLOSED",
+                                    "message": "Upstream WS closed before sending audio",
+                                    "diag": {"stage": "closed", "hint": "Verify xi_api_key validity and that 'start' was accepted upstream."}
+                                })
                             break
                         elif msg.type == WSMsgType.ERROR:
                             err = str(el_ws.exception())
@@ -657,7 +713,434 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
                 
         except WebSocketDisconnect:
             logger.info("Test WebSocket disconnected")
-    
+
+    # =========================================
+    # AGENT: D-ID Agents Streams WS proxy endpoint
+    # =========================================
+    @router.websocket("/agent/{agent_id}")
+    async def websocket_agent_endpoint(websocket: WebSocket, agent_id: str):
+        """
+        WebSocket bridge Client <—> Backend <—> D‑ID Agents Streams pour un agent donné.
+        Protocole client minimal:
+          - Client -> backend (TEXT JSON):
+              {type:"agent.start"} -> ack {type:"agent.started"}
+              {type:"agent.prompt", data:{...}} -> forward JSON vers D‑ID
+              {type:"agent.tool_result", data:{...}} -> forward JSON
+              {type:"agent.end"} -> fermeture
+            Client -> backend (BINARY): audio brutf (forward tel quel)
+          - Backend -> client:
+              {type:"agent.meta", data:{stage}} : accepted, upstream_connected
+              {type:"agent.upstream", data:{...}} : messages TEXT JSON en provenance D‑ID
+              Binaire: relayé tel quel
+              {type:"agent.error", code, message}
+              {type:"agent.end"}
+        Timeouts:
+          - Durée max de session: settings.agent_max_session_duration
+          - Inactivité client: settings.agent_session_timeout
+        """
+        await websocket.accept()
+        await websocket.send_json({"type": "agent.meta", "data": {"stage": "accepted", "agent_id": agent_id}})
+        logger.info("/ws/agent accepted", extra={"agent_id": agent_id})
+
+        # Charger DidAgentsService (via services si dispo; sinon instancier depuis settings)
+        try:
+            try:
+                from backend.services.avatar.did_agents_service import DidAgentsService, DidAgentsError
+            except Exception:
+                from services.avatar.did_agents_service import DidAgentsService, DidAgentsError  # type: ignore
+            did_agents = services.get("did_agents_service")
+            if not isinstance(did_agents, DidAgentsService):
+                try:
+                    from backend.app.config import settings as backend_settings
+                except Exception:
+                    from app.config import get_settings
+                    backend_settings = get_settings()
+                did_agents = DidAgentsService(
+                    api_key=getattr(backend_settings, "did_agents_api_key", None) or getattr(backend_settings, "did_api_key", None),
+                    api_base=getattr(backend_settings, "did_agents_api_base", None),
+                    ws_base=getattr(backend_settings, "did_agents_ws_base", None),
+                )
+                services["did_agents_service"] = did_agents
+        except Exception as e:
+            await websocket.send_json({"type": "agent.error", "code": "SERVICE_INIT_FAILED", "message": str(e)})
+            return
+
+        # Ouvrir le WS upstream vers D‑ID Agents
+        upstream_ws = None
+        aio_session = None
+        try:
+            upstream_ws = await did_agents.open_agent_ws(agent_id)
+            aio_session = getattr(upstream_ws, "_agents_http_session", None)
+            await websocket.send_json({"type": "agent.meta", "data": {"stage": "upstream_connected"}})
+            logger.info("/ws/agent upstream connected", extra={"agent_id": agent_id})
+        except Exception as e:
+            await websocket.send_json({
+                "type": "agent.error",
+                "code": "CONNECT_FAILED",
+                "message": f"Failed to connect D-ID Agents WS: {str(e)}",
+                "hint": "Basculer en audio uniquement via /ws/tts"
+            })
+            logger.error("/ws/agent connect failed", extra={"agent_id": agent_id, "error": str(e)})
+            return
+
+        # Budget/Timeouts
+        try:
+            from backend.app.config import settings as backend_settings
+        except Exception:
+            from app.config import get_settings
+            backend_settings = get_settings()
+        max_session_seconds = int(getattr(backend_settings, "agent_max_session_duration", 300) or 300)
+        idle_timeout = int(getattr(backend_settings, "agent_session_timeout", 30) or 30)
+
+        stop_flag = {"stop": False}
+        last_client_activity = {"ts": asyncio.get_running_loop().time()}
+
+        async def pump_upstream_to_client():
+            try:
+                while not stop_flag["stop"]:
+                    msg = await upstream_ws.receive()
+                    if msg.type == WSMsgType.BINARY:
+                        if websocket.client_state == WebSocketState.CONNECTED:
+                            await websocket.send_bytes(msg.data)
+                        else:
+                            break
+                    elif msg.type == WSMsgType.TEXT:
+                        raw_text = msg.data
+                        try:
+                            data = json.loads(raw_text)
+                            await websocket.send_json({"type": "agent.upstream", "data": data})
+                        except Exception:
+                            await websocket.send_json({"type": "agent.upstream_text", "data": raw_text})
+                    elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED):
+                        await websocket.send_json({"type": "agent.end"})
+                        break
+                    elif msg.type == WSMsgType.ERROR:
+                        err = str(upstream_ws.exception())
+                        await websocket.send_json({"type": "agent.error", "code": "UPSTREAM_ERROR", "message": err})
+                        break
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                try:
+                    await websocket.send_json({"type": "agent.error", "code": "UPSTREAM_PUMP_ERROR", "message": str(e)})
+                except Exception:
+                    pass
+            finally:
+                stop_flag["stop"] = True
+
+        async def pump_client_to_upstream():
+            try:
+                while not stop_flag["stop"]:
+                    # Gestion d'inactivité
+                    now = asyncio.get_running_loop().time()
+                    if now - last_client_activity["ts"] > idle_timeout:
+                        await websocket.send_json({"type": "agent.error", "code": "IDLE_TIMEOUT", "message": "Client idle timeout"})
+                        break
+
+                    try:
+                        event = await asyncio.wait_for(websocket.receive(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+
+                    last_client_activity["ts"] = asyncio.get_running_loop().time()
+
+                    if event["type"] == "websocket.receive":
+                        if "text" in event:
+                            raw = event["text"]
+                            try:
+                                obj = json.loads(raw)
+                            except Exception:
+                                # Forward brut si pas JSON
+                                await upstream_ws.send_str(raw)
+                                continue
+
+                            mtype = obj.get("type")
+                            if mtype == "agent.start":
+                                await websocket.send_json({"type": "agent.started"})
+                            elif mtype == "agent.prompt":
+                                payload = obj.get("data", {})
+                                await upstream_ws.send_str(json.dumps(payload))
+                            elif mtype == "agent.tool_result":
+                                payload = obj.get("data", {})
+                                await upstream_ws.send_str(json.dumps(payload))
+                            elif mtype == "agent.keepalive":
+                                try:
+                                    await upstream_ws.ping()
+                                except Exception:
+                                    pass
+                                await websocket.send_json({"type": "agent.meta", "data": {"stage": "ping_sent"}})
+                            elif mtype == "agent.end":
+                                stop_flag["stop"] = True
+                                await websocket.send_json({"type": "agent.end"})
+                                break
+                            else:
+                                # Par défaut, forward JSON complet pour flexibilité
+                                await upstream_ws.send_str(json.dumps(obj))
+                        elif "bytes" in event:
+                            data = event["bytes"]
+                            try:
+                                await upstream_ws.send_bytes(data)
+                            except Exception as e:
+                                await websocket.send_json({"type": "agent.error", "code": "FORWARD_BINARY_FAILED", "message": str(e)})
+                                break
+                    elif event["type"] in ("websocket.disconnect",):
+                        stop_flag["stop"] = True
+                        break
+            except WebSocketDisconnect:
+                stop_flag["stop"] = True
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                try:
+                    await websocket.send_json({"type": "agent.error", "code": "CLIENT_PUMP_ERROR", "message": str(e)})
+                except Exception:
+                    pass
+            finally:
+                stop_flag["stop"] = True
+
+        # Tâche de limite de durée de session
+        async def session_deadline():
+            try:
+                await asyncio.sleep(max_session_seconds)
+                if not stop_flag["stop"]:
+                    await websocket.send_json({"type": "agent.error", "code": "MAX_SESSION_DURATION", "message": "Durée maximale de session atteinte"})
+            except asyncio.CancelledError:
+                pass
+            finally:
+                stop_flag["stop"] = True
+
+        t1 = asyncio.create_task(pump_upstream_to_client())
+        t2 = asyncio.create_task(pump_client_to_upstream())
+        t3 = asyncio.create_task(session_deadline())
+
+        try:
+            await asyncio.wait([t1, t2, t3], return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for t in (t1, t2, t3):
+                try:
+                    t.cancel()
+                except Exception:
+                    pass
+            for t in (t1, t2, t3):
+                try:
+                    await t
+                except Exception:
+                    pass
+            try:
+                if upstream_ws and not upstream_ws.closed:
+                    await upstream_ws.close()
+            except Exception:
+                pass
+            try:
+                if aio_session:
+                    await aio_session.close()
+            except Exception:
+                pass
+            logger.info("/ws/agent closed", extra={"agent_id": agent_id})
+
+    # =========================================
+    # AVATAR: D-ID realtime WS proxy endpoint
+    # =========================================
+    @router.websocket("/avatar/{session_id}")
+    async def websocket_avatar_endpoint(websocket: WebSocket, session_id: str):
+        """
+        WebSocket bridge Client <—> Backend <—> D‑ID Realtime pour une session avatar.
+        Design:
+          - Le client parle en JSON:
+              {type:"avatar.start" | "avatar.end" | "avatar.keepalive" | "avatar.forward", ...}
+          - Le backend ouvre une connexion WS vers D‑ID via DidService.open_realtime_ws(session_id)
+          - Tous les messages client 'avatar.forward' sont forwardés tels quels vers D‑ID (texte)
+          - Les frames binaires envoyées par le client (audio) sont forwardées à D‑ID
+          - Les frames reçues de D‑ID (TEXT/BINARY) sont forwardées au client
+        Fallback:
+          - Si ouverture D‑ID échoue, on envoie un message d’erreur structuré et le frontend peut basculer ElevenLabs (/ws/tts).
+        """
+        await websocket.accept()
+        await websocket.send_json({"type": "avatar.meta", "data": {"stage": "accepted", "session_id": session_id}})
+
+        # Resolve DidService
+        did = None
+        try:
+            try:
+                from backend.services.avatar.did_service import DidService, DidServiceError
+            except Exception:
+                from services.avatar.did_service import DidService, DidServiceError  # type: ignore
+            # Reuse service if provided via DI bag
+            did = services.get("did_service")
+            if not isinstance(did, DidService):
+                # Build from settings service/env to avoid import cycles
+                try:
+                    from backend.app.config import settings as backend_settings
+                except Exception:
+                    from app.config import get_settings
+                    backend_settings = get_settings()
+                did = DidService(
+                    api_key=getattr(backend_settings, "did_api_key", None),
+                    api_base=getattr(backend_settings, "did_api_base", None),
+                    realtime_ws_url=getattr(backend_settings, "did_realtime_ws_url", None),
+                    default_avatar_id=getattr(backend_settings, "avatar_default_id", None),
+                    default_resolution=getattr(backend_settings, "avatar_default_resolution", None),
+                    default_backdrop=getattr(backend_settings, "avatar_default_backdrop", None),
+                )
+                services["did_service"] = did  # cache
+        except Exception as e:
+            await websocket.send_json({"type": "avatar.error", "code": "SERVICE_INIT_FAILED", "message": str(e)})
+            return
+
+        # Try open upstream
+        upstream_ws = None
+        aio_session = None
+        try:
+            upstream_ws = await did.open_realtime_ws(session_id)
+            # Retrieve underlying aiohttp session for cleanup
+            aio_session = getattr(upstream_ws, "_did_http_session", None)
+            await websocket.send_json({"type": "avatar.meta", "data": {"stage": "upstream_connected"}})
+            logger.info("/ws/avatar upstream D-ID connected", extra={"session_id": session_id})
+        except Exception as e:
+            await websocket.send_json({
+                "type": "avatar.error",
+                "code": "CONNECT_FAILED",
+                "message": f"Failed to connect D-ID realtime: {str(e)}",
+                "hint": "Basculer en audio uniquement via /ws/tts"
+            })
+            logger.error("/ws/avatar connect failed", extra={"session_id": session_id, "error": str(e)})
+            # No upstream, just stop
+            return
+
+        # Pump tasks
+        stop_flag = {"stop": False}
+
+        async def pump_upstream_to_client():
+            try:
+                while not stop_flag["stop"]:
+                    msg = await upstream_ws.receive()
+                    if msg.type == WSMsgType.BINARY:
+                        if websocket.client_state == WebSocketState.CONNECTED:
+                            await websocket.send_bytes(msg.data)
+                        else:
+                            break
+                    elif msg.type == WSMsgType.TEXT:
+                        # Forward text JSON as-is
+                        try:
+                            # Validate JSON to ensure client receives consistent payloads
+                            data = json.loads(msg.data)
+                            await websocket.send_json({"type": "avatar.upstream", "data": data})
+                        except Exception:
+                            # If not JSON, forward raw string as meta
+                            await websocket.send_json({"type": "avatar.upstream_text", "data": msg.data})
+                    elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED):
+                        await websocket.send_json({"type": "avatar.end"})
+                        break
+                    elif msg.type == WSMsgType.ERROR:
+                        err = str(upstream_ws.exception())
+                        await websocket.send_json({"type": "avatar.error", "code": "UPSTREAM_ERROR", "message": err})
+                        break
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                try:
+                    await websocket.send_json({"type": "avatar.error", "code": "UPSTREAM_PUMP_ERROR", "message": str(e)})
+                except Exception:
+                    pass
+            finally:
+                stop_flag["stop"] = True
+
+        async def pump_client_to_upstream():
+            try:
+                while not stop_flag["stop"]:
+                    event = await websocket.receive()
+                    if event["type"] == "websocket.receive":
+                        if "text" in event:
+                            raw = event["text"]
+                            # Expect control messages
+                            try:
+                                obj = json.loads(raw)
+                            except Exception:
+                                # Pass through as raw string
+                                await upstream_ws.send_str(raw)
+                                continue
+                            mtype = obj.get("type")
+                            if mtype == "avatar.start":
+                                # Client indicates readiness; optionally forward a keepalive to D-ID
+                                await websocket.send_json({"type": "avatar.started"})
+                            elif mtype == "avatar.forward":
+                                # Forward inner payload as JSON string or binary if base64 provided
+                                payload = obj.get("data")
+                                # If payload is dict, send as JSON
+                                if isinstance(payload, dict):
+                                    await upstream_ws.send_str(json.dumps(payload))
+                                else:
+                                    # If a raw string, send as-is
+                                    await upstream_ws.send_str(str(payload))
+                            elif mtype == "avatar.keepalive":
+                                try:
+                                    await upstream_ws.ping()
+                                except Exception:
+                                    pass
+                                await websocket.send_json({"type": "avatar.meta", "data": {"stage": "ping_sent"}})
+                            elif mtype == "avatar.end":
+                                stop_flag["stop"] = True
+                                await websocket.send_json({"type": "avatar.end"})
+                                break
+                            else:
+                                # Unknown -> forward raw to upstream for flexibility
+                                await upstream_ws.send_str(raw)
+                        elif "bytes" in event:
+                            data = event["bytes"]
+                            # Forward raw binary (e.g., audio chunk) to D-ID
+                            try:
+                                await upstream_ws.send_bytes(data)
+                            except Exception as e:
+                                await websocket.send_json({"type": "avatar.error", "code": "FORWARD_BINARY_FAILED", "message": str(e)})
+                                break
+                    elif event["type"] in ("websocket.disconnect",):
+                        stop_flag["stop"] = True
+                        break
+            except WebSocketDisconnect:
+                stop_flag["stop"] = True
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                try:
+                    await websocket.send_json({"type": "avatar.error", "code": "CLIENT_PUMP_ERROR", "message": str(e)})
+                except Exception:
+                    pass
+            finally:
+                stop_flag["stop"] = True
+
+        # Run both pumps concurrently
+        t1 = asyncio.create_task(pump_upstream_to_client())
+        t2 = asyncio.create_task(pump_client_to_upstream())
+
+        try:
+            await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stop_flag["stop"] = True
+            for t in (t1, t2):
+                try:
+                    t.cancel()
+                except Exception:
+                    pass
+            for t in (t1, t2):
+                try:
+                    await t
+                except Exception:
+                    pass
+            # Cleanup upstream
+            try:
+                if upstream_ws and not upstream_ws.closed:
+                    await upstream_ws.close()
+            except Exception:
+                pass
+            try:
+                if aio_session:
+                    await aio_session.close()
+            except Exception:
+                pass
+            logger.info("/ws/avatar closed", extra={"session_id": session_id})
+
+        # No explicit return body for WS route
+
     return router
 
 

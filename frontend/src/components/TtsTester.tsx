@@ -1,5 +1,125 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import TtsClient, { VisemeEvent, MetaEvent } from "../services/ttsClient";
+import TtsClient, { VisemeEvent, MetaEvent, TtsError } from "../services/ttsClient";
+
+/**
+ * AgentsClient - client WebSocket minimal pour /ws/agent/{agent_id}
+ * Gère: agent.start / agent.prompt / agent.end, reçoit agent.meta/agent.upstream, binaire.
+ * Fallback: sur agent.error CONNECT_FAILED, on déclenchera la bascule vers TTS.
+ *
+ * NOTE: Cette section ajoute seulement la classe. Le rendu UI est plus bas:
+ *  - Ajout d'onglets TTS/Agents
+ *  - Panneau Agents avec contrôles et affichage
+ */
+class AgentsClient {
+  private url: string;
+  private ws: WebSocket | null = null;
+  private intentionalClose = false;
+
+  private onMetaHandlers: ((m: any) => void)[] = [];
+  private onUpstreamHandlers: ((m: any) => void)[] = [];
+  private onBinaryHandlers: ((buf: ArrayBuffer) => void)[] = [];
+  private onErrorHandlers: ((e: any) => void)[] = [];
+  private onLogHandlers: ((line: string) => void)[] = [];
+
+  constructor(agentId: string, base = (import.meta as any)?.env?.VITE_BACKEND_WS_URL?.replace(/\/ws\/tts$/, "") || "ws://127.0.0.1:8000") {
+    const baseWs = base.endsWith("/ws/tts") ? base.replace(/\/ws\/tts$/, "") : base;
+    this.url = `${baseWs}/ws/agent/${encodeURIComponent(agentId)}`;
+    this.log(`init AgentsClient url=${this.url}`);
+  }
+
+  private log(line: string) {
+    const ts = new Date().toISOString();
+    const msg = `[AgentsClient ${ts}] ${line}`;
+    try { console.debug(msg); } catch {}
+    this.onLogHandlers.forEach((h) => h(msg));
+  }
+
+  async connect(): Promise<void> {
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      this.log(`connect: reuse existing ws state=${this.ws.readyState}`);
+      return;
+    }
+    this.intentionalClose = false;
+    this.ws = new WebSocket(this.url);
+    this.ws.binaryType = "arraybuffer";
+
+    await new Promise<void>((resolve) => {
+      if (!this.ws) return resolve();
+      this.ws.onopen = () => {
+        this.log("onopen");
+        resolve();
+      };
+      this.ws.onerror = (e) => {
+        this.log(`onerror: ${String((e as any)?.message || e?.type)}`);
+      };
+      this.ws.onclose = (ev) => {
+        this.log(`onclose code=${ev.code} reason=${ev.reason}`);
+        if (this.intentionalClose || ev.code === 1000) return;
+      };
+      this.ws.onmessage = (evt) => {
+        if (evt.data instanceof ArrayBuffer) {
+          this.onBinaryHandlers.forEach((h) => h(evt.data));
+          return;
+        }
+        if (typeof evt.data === "string") {
+          try {
+            const msg = JSON.parse(evt.data);
+            const type = msg?.type;
+            if (type === "agent.meta") {
+              this.onMetaHandlers.forEach((h) => h(msg));
+            } else if (type === "agent.upstream" || type === "agent.upstream_text") {
+              this.onUpstreamHandlers.forEach((h) => h(msg));
+            } else if (type === "agent.error") {
+              this.onErrorHandlers.forEach((h) => h(msg));
+            } else {
+              this.onMetaHandlers.forEach((h) => h({ type: "agent.meta", data: msg }));
+            }
+          } catch {
+            this.onUpstreamHandlers.forEach((h) => h({ type: "agent.upstream_text", data: String(evt.data) }));
+          }
+        }
+      };
+    });
+  }
+
+  async start(): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) await this.connect();
+    this.ws!.send(JSON.stringify({ type: "agent.start" }));
+  }
+
+  async prompt(payload: any): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) await this.connect();
+    this.ws!.send(JSON.stringify({ type: "agent.prompt", data: payload }));
+  }
+
+  async end(): Promise<void> {
+    if (!this.ws) return;
+    try {
+      this.ws.send(JSON.stringify({ type: "agent.end" }));
+    } catch {}
+  }
+
+  async disconnect(): Promise<void> {
+    if (!this.ws) return;
+    this.intentionalClose = true;
+    try {
+      this.ws.onopen = null as any;
+      this.ws.onclose = null as any;
+      this.ws.onerror = null as any;
+      this.ws.onmessage = null as any;
+    } catch {}
+    try {
+      if (this.ws.readyState !== WebSocket.CONNECTING) this.ws.close(1000, "intentional");
+    } catch {}
+    this.ws = null;
+  }
+
+  onMeta(handler: (m: any) => void) { this.onMetaHandlers.push(handler); return () => this.onMetaHandlers = this.onMetaHandlers.filter(h => h !== handler); }
+  onUpstream(handler: (m: any) => void) { this.onUpstreamHandlers.push(handler); return () => this.onUpstreamHandlers = this.onUpstreamHandlers.filter(h => h !== handler); }
+  onBinary(handler: (b: ArrayBuffer) => void) { this.onBinaryHandlers.push(handler); return () => this.onBinaryHandlers = this.onBinaryHandlers.filter(h => h !== handler); }
+  onError(handler: (e: any) => void) { this.onErrorHandlers.push(handler); return () => this.onErrorHandlers = this.onErrorHandlers.filter(h => h !== handler); }
+  onLog(handler: (line: string) => void) { this.onLogHandlers.push(handler); return () => this.onLogHandlers = this.onLogHandlers.filter(h => h !== handler); }
+}
 
 type Props = {
   wsUrl?: string;

@@ -36,6 +36,35 @@ from genai_processors import ProcessorPart, streams
 
 logger = get_logger(__name__)
 
+# ---------- D-ID Agents: Schemas ----------
+from pydantic import BaseModel, Field
+
+class CreateAgentRequest(BaseModel):
+    name: str = Field(..., description="Nom de l'agent")
+    conversation_mode: Optional[str] = Field(None, description="hybrid|factual|creative")
+    creativity_level: Optional[float] = Field(None, description="0.0-1.0")
+    llm_model: Optional[str] = Field(None, description="Modèle LLM ex: gpt-4o")
+    voice_id: Optional[str] = Field(None, description="Voix/preset D-ID")
+    knowledge_text: Optional[str] = Field(None, description="Texte de connaissance initial")
+    extra: Optional[Dict[str, Any]] = Field(None, description="Champs additionnels agents")
+
+class AgentResponse(BaseModel):
+    ok: bool = True
+    data: Dict[str, Any]
+
+# ---------- D-ID Avatar: Schemas ----------
+from pydantic import BaseModel, Field
+
+class CreateAvatarSessionRequest(BaseModel):
+    avatar_id: Optional[str] = Field(None, description="ID de l'avatar D-ID (défaut via config)")
+    resolution: Optional[str] = Field(None, description="ex: 720p, 1080p")
+    backdrop: Optional[str] = Field(None, description="ex: bureau")
+    extra: Optional[Dict[str, Any]] = Field(None, description="Champs additionnels passés au backend D-ID")
+
+class AvatarSessionResponse(BaseModel):
+    ok: bool = True
+    data: Dict[str, Any]
+
 
 def create_router(services: Dict[str, Any]) -> APIRouter:
     """
@@ -61,6 +90,213 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
 
     def get_voice_service():
         return services.get('voice')
+
+    # D-ID Agents service accessor
+    def get_did_agents_service():
+        try:
+            from backend.services.avatar.did_agents_service import DidAgentsService
+        except Exception:
+            from services.avatar.did_agents_service import DidAgentsService  # type: ignore
+        svc = services.get("did_agents_service")
+        if isinstance(svc, DidAgentsService):
+            return svc
+        # Build with settings
+        try:
+            from backend.app.config import settings as backend_settings
+        except Exception:
+            from app.config import get_settings
+            backend_settings = get_settings()
+        did_agents = DidAgentsService(
+            api_key=getattr(backend_settings, "did_agents_api_key", None) or getattr(backend_settings, "did_api_key", None),
+            api_base=getattr(backend_settings, "did_agents_api_base", None),
+            ws_base=getattr(backend_settings, "did_agents_ws_base", None),
+        )
+        services["did_agents_service"] = did_agents
+        return did_agents
+
+    # ---------- D-ID Agents: REST Proxy (metadata) ----------
+    from fastapi import HTTPException
+
+    @router.get("/api/v1/agents/{agent_id}")
+    async def get_agent_metadata(agent_id: str):
+        """
+        Proxy: Retrieve D-ID Agent metadata.
+        Upstream: GET {api_base}/v1/agents/{agentId}
+        """
+        did_agents = get_did_agents_service()
+        try:
+            async with aiohttp.ClientSession(headers={"Authorization": f"Basic {did_agents._basic_token}", "Accept": "application/json"}) as session:
+                url = f"{did_agents.api_base}/v1/agents/{agent_id}"
+                async with session.get(url) as resp:
+                    data = await (resp.json() if resp.content_type == "application/json" else resp.text())
+                    if resp.status >= 400:
+                        raise HTTPException(status_code=resp.status, detail={"upstream_error": data})
+                    return JSONResponse(status_code=resp.status, content=serialize_response_data(data))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"get_agent_metadata failed: {e}")
+            raise HTTPException(status_code=502, detail=str(e))
+
+    @router.get("/api/v1/agents")
+    async def list_agents():
+        """
+        Proxy: List D-ID Agents.
+        Upstream: GET {api_base}/v1/agents
+        """
+        did_agents = get_did_agents_service()
+        try:
+            async with aiohttp.ClientSession(headers={"Authorization": f"Basic {did_agents._basic_token}", "Accept": "application/json"}) as session:
+                url = f"{did_agents.api_base}/v1/agents"
+                async with session.get(url) as resp:
+                    data = await (resp.json() if resp.content_type == "application/json" else resp.text())
+                    if resp.status >= 400:
+                        raise HTTPException(status_code=resp.status, detail={"upstream_error": data})
+                    return JSONResponse(status_code=resp.status, content=serialize_response_data(data))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"list_agents failed: {e}")
+            raise HTTPException(status_code=502, detail=str(e))
+
+    # ---------- D-ID Agents: Streams WebRTC Proxies ----------
+
+    @router.post("/api/v1/agents/{agent_id}/streams")
+    async def create_agent_stream(agent_id: str, body: Dict[str, Any] = Body(default_factory=dict)):
+        """
+        Proxy: Create a new stream for a D-ID Agent.
+        Upstream: POST {api_base}/agents/{agentId}/streams
+        """
+        did_agents = get_did_agents_service()
+        try:
+            async with aiohttp.ClientSession(headers={"Authorization": f"Basic {did_agents._basic_token}", "Content-Type": "application/json", "Accept": "application/json"}) as session:
+                url = f"{did_agents.api_base}/agents/{agent_id}/streams"
+                async with session.post(url, json=body or {}) as resp:
+                    data = await (resp.json() if resp.content_type == "application/json" else resp.text())
+                    if resp.status >= 400:
+                        raise HTTPException(status_code=resp.status, detail={"upstream_error": data})
+                    return JSONResponse(status_code=resp.status, content=serialize_response_data(data))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"create_agent_stream failed: {e}")
+            raise HTTPException(status_code=502, detail=str(e))
+
+    @router.post("/api/v1/agents/{agent_id}/streams/{stream_id}/sdp")
+    async def start_agent_webrtc(agent_id: str, stream_id: str, body: Dict[str, Any] = Body(..., description="SDP offer/answer payload")):
+        """
+        Proxy: Start a WebRTC connection (SDP exchange).
+        Upstream: POST {api_base}/agents/{agentId}/streams/{streamId}/sdp
+        """
+        did_agents = get_did_agents_service()
+        try:
+            async with aiohttp.ClientSession(headers={"Authorization": f"Basic {did_agents._basic_token}", "Content-Type": "application/json", "Accept": "application/json"}) as session:
+                url = f"{did_agents.api_base}/agents/{agent_id}/streams/{stream_id}/sdp"
+                async with session.post(url, json=body) as resp:
+                    data = await (resp.json() if resp.content_type == "application/json" else resp.text())
+                    if resp.status >= 400:
+                        raise HTTPException(status_code=resp.status, detail={"upstream_error": data})
+                    return JSONResponse(status_code=resp.status, content=serialize_response_data(data))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"start_agent_webrtc failed: {e}")
+            raise HTTPException(status_code=502, detail=str(e))
+
+    @router.post("/api/v1/agents/{agent_id}/streams/{stream_id}/ice")
+    async def submit_agent_ice(agent_id: str, stream_id: str, body: Dict[str, Any] = Body(..., description="ICE candidates payload")):
+        """
+        Proxy: Submit network information (ICE candidates).
+        Upstream: POST {api_base}/agents/{agentId}/streams/{streamId}/ice
+        """
+        did_agents = get_did_agents_service()
+        try:
+            async with aiohttp.ClientSession(headers={"Authorization": f"Basic {did_agents._basic_token}", "Content-Type": "application/json", "Accept": "application/json"}) as session:
+                url = f"{did_agents.api_base}/agents/{agent_id}/streams/{stream_id}/ice"
+                async with session.post(url, json=body) as resp:
+                    data = await (resp.json() if resp.content_type == "application/json" else resp.text())
+                    if resp.status >= 400:
+                        raise HTTPException(status_code=resp.status, detail={"upstream_error": data})
+                    return JSONResponse(status_code=resp.status, content=serialize_response_data(data))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"submit_agent_ice failed: {e}")
+            raise HTTPException(status_code=502, detail=str(e))
+
+    @router.post("/api/v1/agents/{agent_id}/streams/{stream_id}")
+    async def create_agent_video_stream(agent_id: str, stream_id: str, body: Dict[str, Any] = Body(default_factory=dict)):
+        """
+        Proxy: Create a video stream inside the Agent stream.
+        Upstream: POST {api_base}/agents/{agentId}/streams/{streamId}
+        """
+        did_agents = get_did_agents_service()
+        try:
+            async with aiohttp.ClientSession(headers={"Authorization": f"Basic {did_agents._basic_token}", "Content-Type": "application/json", "Accept": "application/json"}) as session:
+                url = f"{did_agents.api_base}/agents/{agent_id}/streams/{stream_id}"
+                async with session.post(url, json=body or {}) as resp:
+                    data = await (resp.json() if resp.content_type == "application/json" else resp.text())
+                    if resp.status >= 400:
+                        raise HTTPException(status_code=resp.status, detail={"upstream_error": data})
+                    return JSONResponse(status_code=resp.status, content=serialize_response_data(data))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"create_agent_video_stream failed: {e}")
+            raise HTTPException(status_code=502, detail=str(e))
+
+    @router.delete("/api/v1/agents/{agent_id}/streams/{stream_id}")
+    async def delete_agent_video_stream(agent_id: str, stream_id: str):
+        """
+        Proxy: Delete a video stream.
+        Upstream: DELETE {api_base}/agents/{agentId}/streams/{streamId}
+        """
+        did_agents = get_did_agents_service()
+        try:
+            async with aiohttp.ClientSession(headers={"Authorization": f"Basic {did_agents._basic_token}", "Accept": "application/json"}) as session:
+                url = f"{did_agents.api_base}/agents/{agent_id}/streams/{stream_id}"
+                async with session.delete(url) as resp:
+                    try:
+                        data = await resp.json()
+                    except Exception:
+                        data = {"status": await resp.text()}
+                    if resp.status >= 400:
+                        raise HTTPException(status_code=resp.status, detail={"upstream_error": data})
+                    return JSONResponse(status_code=resp.status, content=serialize_response_data({"ok": True, "data": data}))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"delete_agent_video_stream failed: {e}")
+            raise HTTPException(status_code=502, detail=str(e))
+
+    # D-ID service factory
+    def get_did_service():
+        try:
+            # Lazy import to avoid circular deps at startup
+            from backend.services.avatar.did_service import DidService
+        except Exception:
+            # Fallback relative import if package root differs
+            from services.avatar.did_service import DidService  # type: ignore
+        # Reuse singleton if previously constructed in services bag
+        svc = services.get("did_service")
+        if isinstance(svc, DidService):
+            return svc
+        # Create a new instance with settings from backend.app.config
+        try:
+            from backend.app.config import settings as backend_settings
+        except Exception:
+            from app.config import get_settings
+            backend_settings = get_settings()
+        did = DidService(
+            api_key=getattr(backend_settings, "did_api_key", None),
+            api_base=getattr(backend_settings, "did_api_base", None),
+            realtime_ws_url=getattr(backend_settings, "did_realtime_ws_url", None),
+            default_avatar_id=getattr(backend_settings, "avatar_default_id", None),
+            default_resolution=getattr(backend_settings, "avatar_default_resolution", None),
+            default_backdrop=getattr(backend_settings, "avatar_default_backdrop", None),
+        )
+        services["did_service"] = did
+        return did
     
     # ===== SESSION MANAGEMENT ENDPOINTS =====
     
@@ -313,6 +549,54 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
             logger.error(f"/tts-stream proxy failed: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     
+    # ===== AVATAR (D-ID) SESSION ENDPOINTS =====
+
+    @router.post("/api/v1/avatar/session", response_model=AvatarSessionResponse, status_code=status.HTTP_201_CREATED)
+    async def create_avatar_session(body: CreateAvatarSessionRequest):
+        """
+        Crée une session D-ID Avatar via le proxy backend.
+        Utilise les valeurs par défaut de configuration si non fournies.
+        """
+        try:
+            did = get_did_service()
+            payload_extra = body.extra or {}
+            created = await did.create_session(
+                avatar_id=body.avatar_id,
+                resolution=body.resolution,
+                backdrop=body.backdrop,
+                extra=payload_extra,
+            )
+            return AvatarSessionResponse(ok=True, data=created)
+        except Exception as e:
+            logger.error(f"create_avatar_session failed: {e}")
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"D-ID create_session error: {str(e)}")
+
+    @router.get("/api/v1/avatar/session/{session_id}", response_model=AvatarSessionResponse)
+    async def get_avatar_session(session_id: str):
+        """
+        Récupère les détails d'une session D-ID Avatar.
+        """
+        try:
+            did = get_did_service()
+            details = await did.get_session(session_id)
+            return AvatarSessionResponse(ok=True, data=details)
+        except Exception as e:
+            logger.error(f"get_avatar_session failed: {e}")
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"D-ID get_session error: {str(e)}")
+
+    @router.delete("/api/v1/avatar/session/{session_id}", status_code=status.HTTP_200_OK)
+    async def delete_avatar_session(session_id: str):
+        """
+        Supprime une session D-ID Avatar (nettoyage).
+        """
+        try:
+            did = get_did_service()
+            result = await did.delete_session(session_id)
+            return JSONResponse(status_code=status.HTTP_200_OK, content=serialize_response_data({"ok": True, **result}))
+        except Exception as e:
+            logger.error(f"delete_avatar_session failed: {e}")
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"D-ID delete_session error: {str(e)}")
+
     @router.get("/debug/tts-auth")
     async def debug_tts_auth():
         """

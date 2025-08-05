@@ -23,6 +23,7 @@ import {
 } from '../../hooks/useSession';
 import { useSessionStore } from '../../store/useSessionStore';
 import { Button, Card, Badge, LoadingSpinner } from '../../components/ui';
+import DidAgent from '../../components/DidAgent';
 
 // Helper function to convert audio blob to WAV format using Web Audio API
 const convertToWav = async (audioBlob: Blob, filename: string): Promise<File> => {
@@ -729,6 +730,34 @@ const SessionDetailPage: React.FC = () => {
 
   return (
     <div className="p-6 space-y-6">
+      {/* Agent vidéo en haut */}
+      <Card className="p-0 overflow-hidden border-0 bg-gradient-to-br from-slate-900 to-slate-800">
+        <div className="px-6 pt-6">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold text-slate-100">Assistant vidéo</h3>
+            <Badge variant="info" size="sm">BETA</Badge>
+          </div>
+          <p className="text-slate-400 text-sm mt-1">
+            Interagissez avec votre coach virtuel pendant la session.
+          </p>
+        </div>
+        <div className="p-4 md:p-6">
+          <DidAgent
+            containerId={`did-agent-session-${id || 'unknown'}`}
+            mode="full"
+            monitor={true}
+            height={560}
+            rounded={true}
+            shadow={true}
+          />
+          {!import.meta.env.VITE_DID_CLIENT_KEY && (
+            <p className="text-xs text-yellow-400 mt-3">
+              VITE_DID_CLIENT_KEY non configurée. Ajoutez-la dans frontend/.env puis redémarrez le serveur de dev.
+            </p>
+          )}
+        </div>
+      </Card>
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-4">
@@ -785,7 +814,7 @@ const SessionDetailPage: React.FC = () => {
       )}
 
       {/* Session Configuration */}
-      <Card className="p-4">
+      <Card className="p-4 border-slate-700 bg-slate-900/40 backdrop-blur">
         <h3 className="font-semibold text-slate-100 mb-3">Configuration de session</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="space-y-1">
@@ -832,7 +861,7 @@ const SessionDetailPage: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Recording Interface */}
         <div className="lg:col-span-2">
-          <Card className="p-6">
+          <Card className="p-6 border-slate-700 bg-slate-900/40 backdrop-blur">
             <div className="text-center space-y-6">
               {/* Audio Visualizer */}
               <div className="relative">
@@ -975,6 +1004,26 @@ const SessionDetailPage: React.FC = () => {
 
         {/* Session Info & Real-time Feedback */}
         <div className="space-y-6">
+          {/* Conseils dynamiques basés sur la session */}
+          <Card className="p-4 border-slate-700 bg-gradient-to-b from-purple-900/20 to-slate-900/40 backdrop-blur">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold text-slate-100">Conseils dynamiques</h3>
+              <Badge variant="primary" size="sm" className="uppercase">{session.language}</Badge>
+            </div>
+            <div className="space-y-2">
+              {getSessionTips(session.session_type, session.language, session.config?.focus_areas).map((tip, index) => (
+                <div key={index} className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg">
+                  <div className="flex items-start space-x-2">
+                    <MessageSquare className="w-4 h-4 text-purple-400 mt-0.5 flex-shrink-0" />
+                    <p className="text-sm text-purple-200">
+                      {tip}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+
           {/* Session Details */}
           <Card className="p-4">
             <h3 className="font-semibold text-slate-100 mb-3">Session Details</h3>
@@ -1016,7 +1065,7 @@ const SessionDetailPage: React.FC = () => {
           </Card>
 
           {/* Personalized Tips */}
-          <Card className="p-4">
+          <Card className="p-4 border-slate-700 bg-slate-900/40 backdrop-blur">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold text-slate-100">Conseils personnalisés</h3>
               <Badge variant="primary" size="sm">
@@ -1121,7 +1170,7 @@ const SessionDetailPage: React.FC = () => {
 
       {/* Session History/Feedback */}
       {feedback?.data && feedback.data.length > 0 && (
-        <Card className="p-6">
+        <Card className="p-6 border-slate-700 bg-slate-900/40 backdrop-blur">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-slate-100">Session Feedback</h2>
             <Button variant="outline" size="sm">
