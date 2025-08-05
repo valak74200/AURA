@@ -16,6 +16,7 @@ import { useSessionAnalytics, useSessions } from '../../hooks/useSession';
 import { useAuthStore } from '../../store/useAuthStore';
 import { Card, Button, Badge, LoadingSpinner } from '../../components/ui';
 import { MultilangualMetrics, SessionsQuery } from '../../types';
+import MetricsDashboard from '../../components/metrics/MetricsDashboard';
 
 const AnalyticsPage: React.FC = () => {
   const { user } = useAuthStore();
@@ -176,107 +177,33 @@ const AnalyticsPage: React.FC = () => {
     );
   };
 
+  // Generate mock data for the MetricsDashboard from sessions
+  const metricsData = sessions.slice(0, 30).map((session, index) => ({
+    date: new Date(session.created_at).toISOString().split('T')[0],
+    clarity: Math.floor(Math.random() * 30) + 70,
+    pace: Math.floor(Math.random() * 25) + 75,
+    volume: Math.floor(Math.random() * 20) + 80,
+    engagement: Math.floor(Math.random() * 35) + 65,
+    overall: Math.floor(Math.random() * 20) + 80,
+  }));
+
+  const handleTimeRangeChange = (range: '7d' | '30d' | '90d' | '1y') => {
+    setTimeRange(range as any);
+  };
+
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-100">Analytics Dashboard</h1>
-          <p className="text-gray-600">Track your speech improvement progress</p>
-        </div>
-        
-        <div className="flex items-center space-x-3">
-          <select 
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            value={selectedSessionId || ''}
-            onChange={(e) => setSelectedSessionId(e.target.value || null)}
-          >
-            <option value="">Latest Session</option>
-            {sessions.map((session) => (
-              <option key={session.id} value={session.id}>
-                {session.title} - {new Date(session.created_at).toLocaleDateString()}
-              </option>
-            ))}
-          </select>
-          
-          <Button variant="outline">
-            <Download className="w-4 h-4 mr-2" />
-            Export
-          </Button>
-        </div>
-      </div>
-
-      {/* Overview Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="p-4">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-              <Mic className="w-5 h-5 text-blue-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Total Sessions</p>
-              <p className="text-2xl font-bold text-slate-100">{totalSessions}</p>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-              <Clock className="w-5 h-5 text-green-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Total Duration</p>
-              <p className="text-2xl font-bold text-slate-100">{Math.round(totalDuration / 60)}min</p>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
-              <BarChart3 className="w-5 h-5 text-purple-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Avg Score</p>
-              <p className="text-2xl font-bold text-slate-100">{Math.round(avgScore)}%</p>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-yellow-100 rounded-lg flex items-center justify-center">
-              <Award className="w-5 h-5 text-yellow-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Language</p>
-              <p className="text-2xl font-bold text-slate-100">
-                {sessions[0]?.language?.toUpperCase() || 'N/A'}
-              </p>
-            </div>
-          </div>
-        </Card>
-      </div>
-
-      {/* Performance Metrics */}
-      {analytics?.overall_metrics && (
-        <Card className="p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-lg font-semibold text-slate-100">Performance Metrics</h2>
-            <Badge variant="info" size="sm">
-              {analytics.language || 'Multi-language'}
-            </Badge>
-          </div>
-          
-          {renderMetricChart(analytics.overall_metrics)}
-        </Card>
-      )}
+      {/* MetricsDashboard Integration */}
+      <MetricsDashboard
+        data={metricsData}
+        timeRange={timeRange === 'week' ? '7d' : timeRange === 'month' ? '30d' : timeRange === 'quarter' ? '90d' : '30d'}
+        onTimeRangeChange={handleTimeRangeChange}
+      />
 
       {/* Session History */}
       <Card className="p-6">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold text-slate-100">Session History</h2>
+          <h2 className="text-lg font-semibold text-slate-100">Recent Sessions</h2>
           <Button 
             variant="outline" 
             size="sm"

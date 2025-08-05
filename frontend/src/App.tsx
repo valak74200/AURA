@@ -19,6 +19,8 @@ const SessionDetailPage = React.lazy(() => import('./pages/sessions/SessionDetai
 const AnalyticsPage = React.lazy(() => import('./pages/analytics/AnalyticsPage'));
 const SettingsPage = React.lazy(() => import('./pages/SettingsPage'));
 const TtsTestPage = React.lazy(() => import('./pages/TtsTest'));
+const AgentPage = React.lazy(() => import('./pages/AgentPage'));
+const PricingPage = React.lazy(() => import('./pages/PricingPage'));
 
 // Create QueryClient instance
 const queryClient = new QueryClient({
@@ -187,6 +189,24 @@ function App() {
                               <SettingsPage />
                             </ModernLayout>
                           </ProtectedRoute>
+                        }
+                      />
+                      <Route
+                        path="/agent"
+                        element={
+                          <ProtectedRoute>
+                            <AgentPage />
+                          </ProtectedRoute>
+                        }
+                      />
+
+                      {/* Public routes */}
+                      <Route
+                        path="/pricing"
+                        element={
+                          <PublicRoute>
+                            <PricingPage />
+                          </PublicRoute>
                         }
                       />
 

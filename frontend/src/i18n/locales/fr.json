@@ -1,0 +1,216 @@
+{
+  "common": {
+    "loading": "Chargement...",
+    "error": "Une erreur s'est produite",
+    "retry": "Réessayer",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "close": "Fermer",
+    "edit": "Modifier",
+    "delete": "Supprimer",
+    "confirm": "Confirmer",
+    "back": "Retour",
+    "next": "Suivant",
+    "previous": "Précédent",
+    "search": "Rechercher",
+    "filter": "Filtrer",
+    "sort": "Trier",
+    "settings": "Paramètres",
+    "dashboard": "Tableau de bord",
+    "profile": "Profil",
+    "logout": "Déconnexion",
+    "login": "Connexion",
+    "signup": "S'inscrire"
+  },
+  "hero": {
+    "title": "Maîtrisez Votre Voix avec un Coach IA",
+    "subtitle": "Plateforme révolutionnaire d'entraînement vocal qui s'adapte à votre langue et culture. Découvrez les retours en temps réel avec nos agents IA futuristes.",
+    "cta": {
+      "primary": "Essai Gratuit",
+      "secondary": "Voir la Démo",
+      "learn_more": "En Savoir Plus"
+    },
+    "features": {
+      "ai_coaching": "Coach IA",
+      "realtime_feedback": "Retours Temps Réel",
+      "multilingual": "Support Multilingue",
+      "analytics": "Analyses Avancées"
+    }
+  },
+  "agent": {
+    "title": "Agent IA D-ID",
+    "subtitle": "Votre coach vocal personnel",
+    "controls": {
+      "start": "Démarrer Session",
+      "stop": "Arrêter Session",
+      "pause": "Pause",
+      "resume": "Reprendre",
+      "mute": "Muet",
+      "unmute": "Rétablir Son",
+      "fullscreen": "Plein Écran",
+      "exit_fullscreen": "Quitter Plein Écran"
+    },
+    "status": {
+      "connecting": "Connexion à l'agent...",
+      "connected": "Connecté",
+      "disconnected": "Déconnecté",
+      "error": "Erreur de connexion"
+    }
+  },
+  "summary": {
+    "title": "Résumé en Temps Réel",
+    "subtitle": "Transcription et analyses instantanées",
+    "tabs": {
+      "transcript": "Transcription",
+      "insights": "Analyses",
+      "feedback": "Retours"
+    },
+    "transcript": {
+      "empty": "Commencez à parler pour voir votre transcription...",
+      "confidence": "Confiance",
+      "speaker": "Locuteur"
+    },
+    "insights": {
+      "pace": "Rythme de Parole",
+      "clarity": "Score de Clarté",
+      "volume": "Niveau Sonore",
+      "emotions": "Émotions Détectées"
+    }
+  },
+  "metrics": {
+    "title": "Métriques de Performance",
+    "subtitle": "Suivez vos progrès dans le temps",
+    "charts": {
+      "progress": "Progrès dans le Temps",
+      "comparison": "Comparaison de Performance",
+      "breakdown": "Répartition des Compétences"
+    },
+    "stats": {
+      "sessions": "Sessions Complétées",
+      "improvement": "Amélioration Globale",
+      "streak": "Série Actuelle",
+      "goals": "Objectifs Atteints"
+    }
+  },
+  "settings": {
+    "title": "Paramètres Audio",
+    "subtitle": "Configurez vos périphériques et préférences audio",
+    "microphone": {
+      "title": "Microphone",
+      "select": "Sélectionner le microphone",
+      "test": "Tester le microphone",
+      "sensitivity": "Sensibilité",
+      "noise_reduction": "Réduction du Bruit"
+    },
+    "speaker": {
+      "title": "Haut-parleurs/Casque",
+      "select": "Sélectionner le périphérique de sortie",
+      "test": "Tester l'audio",
+      "volume": "Volume"
+    },
+    "quality": {
+      "title": "Qualité Audio",
+      "sample_rate": "Taux d'Échantillonnage",
+      "bit_depth": "Profondeur de Bits",
+      "auto_gain": "Contrôle de Gain Automatique"
+    }
+  },
+  "language": {
+    "switch": "Changer de Langue",
+    "current": "Langue Actuelle",
+    "english": "English",
+    "french": "Français"
+  },
+  "pricing": {
+    "title": "Choisissez Votre Plan",
+    "subtitle": "Commencez gratuitement, évoluez quand vous voulez",
+    "billing": {
+      "monthly": "Mensuel",
+      "yearly": "Annuel",
+      "save": "Économisez {{percent}}%"
+    },
+    "plans": {
+      "free": {
+        "name": "Gratuit",
+        "price": "0€",
+        "description": "Parfait pour débuter",
+        "features": [
+          "5 sessions par mois",
+          "Retours IA basiques",
+          "Support anglais uniquement",
+          "Support communautaire"
+        ]
+      },
+      "pro": {
+        "name": "Pro",
+        "price": "19€",
+        "description": "Pour les apprenants sérieux",
+        "features": [
+          "Sessions illimitées",
+          "Coach IA avancé",
+          "Support multilingue",
+          "Support prioritaire",
+          "Analyses avancées",
+          "Objectifs personnalisés"
+        ]
+      },
+      "enterprise": {
+        "name": "Entreprise",
+        "price": "Sur Mesure",
+        "description": "Pour les équipes et organisations",
+        "features": [
+          "Tout dans Pro",
+          "Gestion d'équipe",
+          "Intégration SSO",
+          "Personnalisation de marque",
+          "Accès API",
+          "Support dédié"
+        ]
+      }
+    },
+    "cta": {
+      "get_started": "Commencer",
+      "contact_sales": "Contacter les Ventes",
+      "current_plan": "Plan Actuel"
+    }
+  },
+  "forms": {
+    "validation": {
+      "required": "Ce champ est requis",
+      "email": "Veuillez entrer une adresse email valide",
+      "min_length": "Doit contenir au moins {{count}} caractères",
+      "max_length": "Ne doit pas dépasser {{count}} caractères",
+      "password_match": "Les mots de passe doivent correspondre"
+    },
+    "labels": {
+      "email": "Adresse Email",
+      "password": "Mot de Passe",
+      "confirm_password": "Confirmer le Mot de Passe",
+      "first_name": "Prénom",
+      "last_name": "Nom",
+      "phone": "Numéro de Téléphone",
+      "company": "Entreprise",
+      "message": "Message"
+    },
+    "placeholders": {
+      "email": "Entrez votre email",
+      "password": "Entrez votre mot de passe",
+      "first_name": "Jean",
+      "last_name": "Dupont",
+      "phone": "+33 1 23 45 67 89",
+      "company": "Nom de votre entreprise",
+      "message": "Parlez-nous de vos besoins..."
+    }
+  },
+  "accessibility": {
+    "skip_to_content": "Aller au contenu principal",
+    "menu": "Menu principal",
+    "close_menu": "Fermer le menu",
+    "open_menu": "Ouvrir le menu",
+    "search": "Rechercher",
+    "loading": "Chargement du contenu",
+    "error": "Message d'erreur",
+    "success": "Message de succès",
+    "warning": "Message d'avertissement"
+  }
+}

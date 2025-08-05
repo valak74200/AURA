@@ -29,13 +29,25 @@ async def test_ws_tts_smoke_start_text_end_event_loop():
     got_ping = False
 
     async with websockets.connect(BACKEND_WS_URL, max_size=4 * 1024 * 1024) as ws:
-        # Expect tts.ready first
-        msg = await asyncio.wait_for(ws.recv(), timeout=10)
-        if isinstance(msg, (bytes, bytearray)):
-            pytest.fail("Expected JSON tts.ready but received binary first")
-        data = json.loads(msg)
-        assert data.get("type") == "tts.ready"
-        got_ready = True
+        # Expect initial control messages; server may send tts.meta before tts.ready
+        deadline = asyncio.get_event_loop().time() + 10
+        while asyncio.get_event_loop().time() < deadline and not got_ready:
+            msg = await asyncio.wait_for(ws.recv(), timeout=2)
+            if isinstance(msg, (bytes, bytearray)):
+                pytest.fail("Expected JSON control message but received binary before ready")
+            data = json.loads(msg)
+            t = data.get("type")
+            if t == "tts.ready":
+                got_ready = True
+            elif t in ("tts.meta", "ping"):
+                # acceptable pre-ready meta/heartbeat
+                continue
+            elif t in ("tts.error", "error"):
+                pytest.fail(f"Server returned error before ready: {data}")
+            else:
+                # Ignore unknown control frames pre-ready
+                continue
+        assert got_ready, "Did not receive initial tts.ready within 10s"
 
         # Send start with defaults
         await ws.send(json.dumps({
@@ -48,8 +60,9 @@ async def test_ws_tts_smoke_start_text_end_event_loop():
         }))
 
         # Wait for ack
-        while True:
-            incoming = await asyncio.wait_for(ws.recv(), timeout=15)
+        ack_deadline = asyncio.get_event_loop().time() + 15
+        while asyncio.get_event_loop().time() < ack_deadline:
+            incoming = await asyncio.wait_for(ws.recv(), timeout=3)
             if isinstance(incoming, (bytes, bytearray)):
                 # Could be audio already (some servers ack then audio quickly)
                 got_audio_or_viseme = True
@@ -61,8 +74,12 @@ async def test_ws_tts_smoke_start_text_end_event_loop():
                 break
             elif t == "ping":
                 got_ping = True
+            elif t == "tts.meta":
+                # Accept meta during startup
+                continue
             elif t in ("tts.error", "error"):
                 pytest.fail(f"Server returned error on start: {payload}")
+        assert got_start_ack or got_audio_or_viseme, "Did not receive tts.start ack or early audio"
 
         # Send a short text to synthesize
         await ws.send(json.dumps({

@@ -18,6 +18,7 @@ import { Button } from '../components/ui';
 import Container from '../components/ui/Container';
 import AnimatedCard from '../components/ui/AnimatedCard';
 import GradientText from '../components/ui/GradientText';
+import FuturisticHero from '../components/hero/FuturisticHero';
 import DidAgent from '../components/DidAgent';
 
 const LandingPage: React.FC = () => {
@@ -119,86 +120,10 @@ const LandingPage: React.FC = () => {
       </nav>
 
       {/* Hero Section */}
-      <section className="pt-32 pb-20 bg-gradient-to-br from-blue-50 via-white to-purple-50">
-        <Container>
-          <div className="text-center max-w-4xl mx-auto">
-            <motion.div
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.8 }}
-            >
-              <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-6 leading-tight">
-                Perfectionnez votre{' '}
-                <GradientText>élocution</GradientText>
-                {' '}avec l'IA
-              </h1>
-              
-              <p className="text-xl text-gray-600 mb-8 max-w-2xl mx-auto">
-                AURA utilise l'intelligence artificielle pour analyser votre discours en temps réel 
-                et vous aider à devenir un orateur plus confiant et efficace.
-              </p>
-
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Button 
-                  size="lg" 
-                  variant="primary"
-                  className="text-lg px-8 py-4"
-                  onClick={() => navigate('/register')}
-                >
-                  <Play className="w-5 h-5 mr-2" />
-                  Essayer gratuitement
-                </Button>
-                
-                <Button 
-                  size="lg" 
-                  variant="outline"
-                  className="text-lg px-8 py-4"
-                >
-                  <BarChart3 className="w-5 h-5 mr-2" />
-                  Voir la démo
-                </Button>
-              </div>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 50 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.8, delay: 0.3 }}
-              className="mt-16"
-            >
-              <div className="relative">
-                <div className="absolute inset-0 bg-gradient-to-r from-blue-600/20 to-purple-600/20 blur-3xl"></div>
-                <div className="relative bg-white rounded-2xl shadow-2xl border border-gray-200 p-8">
-                  <div className="flex items-center space-x-4 mb-6">
-                    <div className="w-12 h-12 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center">
-                      <Mic className="w-6 h-6 text-white" />
-                    </div>
-                    <div className="text-left">
-                      <div className="text-lg font-semibold text-gray-900">Session d'entraînement</div>
-                      <div className="text-gray-600">Analyse en temps réel</div>
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-3 gap-4 text-center">
-                    <div>
-                      <div className="text-2xl font-bold text-green-600">95%</div>
-                      <div className="text-sm text-gray-600">Clarté</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold text-blue-600">120</div>
-                      <div className="text-sm text-gray-600">Mots/min</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold text-purple-600">8.5</div>
-                      <div className="text-sm text-gray-600">Score</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        </Container>
-      </section>
+      <FuturisticHero
+        onStartTrial={() => navigate('/register')}
+        onWatchDemo={() => navigate('/agent')}
+      />
 
       {/* Features Section */}
       <section className="py-20 bg-white">

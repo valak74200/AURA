@@ -23,12 +23,34 @@ async def recv_json_or_text(ws: aiohttp.ClientWebSocketResponse):
 
 async def connect_via_aiohttp(base_http_url: str, path: str):
     """
-    Convertit http://testserver en ws://testserver et ouvre un WS pour le path donné.
+    Convertit l'URL HTTP de TestClient en URL WS utilisable par aiohttp, en évitant le hostname
+    'testserver' non résolvable. On force 127.0.0.1 et on conserve le schéma/port.
     """
-    ws_url = base_http_url.replace("http", "ws") + path
+    # base_http_url ressemble à "http://testserver" (ou avec port). On force localhost IP.
+    # On reconstruit: ws://127.0.0.1[:port]/path
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(base_http_url)
+    scheme = "ws" if parsed.scheme == "http" else "wss"
+    netloc = parsed.netloc
+
+    # Extraire port s'il existe
+    if ":" in netloc:
+        host, port = netloc.split(":", 1)
+        netloc = f"127.0.0.1:{port}"
+    else:
+        # par défaut, http -> 80, mais TestClient n'écoute pas réellement; Starlette gère en-mémoire.
+        # Cependant, pour les WS locaux via TestClient, aiohttp doit cibler 127.0.0.1 et le port
+        # exposé par la config AURA_WS_URL si présent; sinon fallback 127.0.0.1:8000.
+        port_env = os.getenv("AURA_WS_PORT", "8000")
+        netloc = f"127.0.0.1:{port_env}"
+
+    ws_base = urlunparse((scheme, netloc, "", "", "", ""))
+    ws_url = ws_base + path
+
     session = aiohttp.ClientSession()
     try:
-        ws = await session.ws_connect(ws_url)
+            ws = await session.ws_connect(ws_url)
     except Exception as e:
         await session.close()
         raise e

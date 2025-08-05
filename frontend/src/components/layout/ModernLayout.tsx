@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import AnimatedBackground from './AnimatedBackground';
 import ModernSidebar from './ModernSidebar';
 import ModernHeader from './ModernHeader';
+import LanguageSwitcher from '../ui/LanguageSwitcher';
 
 interface ModernLayoutProps {
   children: React.ReactNode;
@@ -49,6 +50,14 @@ const ModernLayout: React.FC<ModernLayoutProps> = ({
           className="flex-1 overflow-auto relative z-10"
         >
           <div className="p-6">
+            {/* Language Switcher - positioned in top-right */}
+            <div className="absolute top-4 right-4 z-20">
+              <LanguageSwitcher
+                variant="compact"
+                size="sm"
+                position="bottom-right"
+              />
+            </div>
             {children}
           </div>
         </motion.main>

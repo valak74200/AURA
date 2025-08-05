@@ -35,6 +35,12 @@ const ModernSidebar: React.FC = () => {
       gradient: 'from-emerald-500 to-teal-500'
     },
     {
+      label: 'Agent',
+      icon: Waves,
+      path: '/agent',
+      gradient: 'from-sky-500 to-blue-600'
+    },
+    {
       label: t('nav.analytics'),
       icon: BarChart3,
       path: '/analytics',

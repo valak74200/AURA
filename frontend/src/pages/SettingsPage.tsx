@@ -20,6 +20,7 @@ import { useAuthStore } from '../store/useAuthStore';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Button, Card, Input, Badge } from '../components/ui';
 import { SupportedLanguage } from '../types';
+import AudioSettings from '../components/settings/AudioSettings';
 
 const profileSchema = z.object({
   username: z.string().min(3, 'Username must be at least 3 characters'),
@@ -50,6 +51,19 @@ const SettingsPage: React.FC = () => {
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [audioInputDevice, setAudioInputDevice] = useState<string>('');
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+  
+  // Audio settings state
+  const [audioSettings, setAudioSettings] = useState({
+    microphoneId: '',
+    speakerId: '',
+    microphoneSensitivity: 50,
+    speakerVolume: 80,
+    noiseReduction: true,
+    autoGainControl: true,
+    echoCancellation: true,
+    sampleRate: 44100,
+    bitDepth: 16
+  });
 
   const {
     register,
@@ -337,76 +351,10 @@ const SettingsPage: React.FC = () => {
       case 'audio':
         return (
           <div className="space-y-6">
-            <div>
-              <h3 className="text-lg font-semibold text-slate-100 mb-4">Audio Settings</h3>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Microphone Device
-                  </label>
-                  <select 
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                    value={audioInputDevice}
-                    onChange={(e) => setAudioInputDevice(e.target.value)}
-                  >
-                    {audioDevices.map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>
-                        {device.label || `Microphone ${device.deviceId.slice(0, 8)}...`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                
-                <div className="flex items-center space-x-3">
-                  <Button variant="outline" onClick={testMicrophone}>
-                    <Mic className="w-4 h-4 mr-2" />
-                    Test Microphone
-                  </Button>
-                  <Button variant="outline">
-                    <Volume2 className="w-4 h-4 mr-2" />
-                    Test Speakers
-                  </Button>
-                </div>
-              </div>
-            </div>
-
-            <div className="border-t pt-6">
-              <h3 className="text-lg font-semibold text-slate-100 mb-4">Audio Quality</h3>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Recording Quality
-                  </label>
-                  <select className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
-                    <option value="high">High Quality (48kHz)</option>
-                    <option value="standard" selected>Standard Quality (16kHz)</option>
-                    <option value="low">Low Quality (8kHz)</option>
-                  </select>
-                </div>
-                
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="font-medium text-slate-100">Noise Suppression</h4>
-                    <p className="text-sm text-gray-600">Reduce background noise during recording</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" defaultChecked />
-                    <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
-                  </label>
-                </div>
-                
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="font-medium text-slate-100">Echo Cancellation</h4>
-                    <p className="text-sm text-gray-600">Prevent audio echo and feedback</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" defaultChecked />
-                    <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
-                  </label>
-                </div>
-              </div>
-            </div>
+            <AudioSettings
+              settings={audioSettings}
+              onSettingsChange={setAudioSettings}
+            />
           </div>
         );
 
