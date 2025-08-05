@@ -4,6 +4,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)](https://fastapi.tiangolo.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-blue.svg)](https://postgresql.org)
 [![Gemini AI](https://img.shields.io/badge/Gemini-AI-orange.svg)](https://ai.google.dev)
+[![ElevenLabs TTS](https://img.shields.io/badge/ElevenLabs-TTS-purple.svg)](https://api.elevenlabs.io)
 [![WebSocket](https://img.shields.io/badge/WebSocket-Real--time-red.svg)](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API)
 
 **AURA** est une plateforme avancée de coaching vocal et de présentation qui combine l'intelligence artificielle moderne avec des techniques d'analyse audio en temps réel pour offrir une expérience de formation personnalisée et efficace.
@@ -30,6 +31,7 @@
 - **Suggestions temps réel** pendant la présentation
 - **Analyse contextuelle** basée sur le type de session et la langue
 - **Conseils actionnables** avec encouragement adaptatif culturel
+- **Fonctionnement** : pipeline AURA qui agrège des métriques vocales côté serveur, structure des prompts et appelle le service LLM ([`GeminiService`](backend/services/gemini_service.py:1)) pour produire des feedbacks (realtime_suggestion, coaching_result, performance_update).
 
 ### 📊 **Analytics et Métriques Multilingues**
 - **Métriques spécifiques par langue** : benchmarks culturels et comparaisons
@@ -130,11 +132,12 @@ sequenceDiagram
 - Python 3.11+
 - PostgreSQL 15+
 - Google Cloud Account (pour Gemini AI)
+- Compte ElevenLabs (clé HTTP “xi-api-key”; clé WS optionnelle si vous activez le stream-input)
 
 ### 1. Cloner le Projet
 ```bash
 git clone https://github.com/valak74200/AURA.git
-cd AURA/backend
+cd AURA
 ```
 
 ### 2. Environnement Virtuel
@@ -151,12 +154,16 @@ pip install -r requirements.txt
 ```
 
 ### 4. Configuration Environnement
-Créer un fichier `.env` :
+Créer un fichier `.env` (backend/.env recommandé) :
 
 ```bash
 # API Keys
 GEMINI_API_KEY=votre_clé_gemini_ici
 GOOGLE_CLOUD_PROJECT=votre_projet_gcp
+# ElevenLabs
+ELEVENLABS_API_KEY=votre_cle  # xi-api-key (HTTP). Pour WS stream-input: une clé Bearer est requise côté amont.
+ELEVENLABS_DEFAULT_VOICE_ID=21m00Tcm4TlvDq8ikWAM
+ELEVENLABS_MODEL=eleven_multilingual_v2
 
 # Base de Données
 DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/aura_db
@@ -247,6 +254,32 @@ POST /api/v1/sessions/{id}/feedback/generate
 WS /ws/session/{session_id}    # Connexion temps réel
 WS /ws/test                    # Endpoint de test
 ```
+
+## 🔊 TTS (Synthèse Vocale) ElevenLabs
+
+Deux modes sont supportés:
+- HTTP streaming (fonctionnel par défaut)
+- WebSocket “stream-input” (temps réel, nécessite une clé spécifique côté ElevenLabs)
+
+### Endpoints backend
+- HTTP proxy: `POST /api/v1/tts-stream` → proxy vers `POST /v1/text-to-speech/{voice_id}/stream`
+- WebSocket proxy: `WS /ws/tts` → proxy vers `wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input`
+
+### Authentification ElevenLabs
+- HTTP: header amont `xi-api-key: <votre_cle_http>`
+- WebSocket: header amont `Authorization: Bearer <votre_cle_ws>`
+  - Si vous ne disposez que d’une clé “xi-api-key”, utilisez le mode HTTP (l’UI /tts-test est prévue pour fonctionner en HTTP par défaut).
+  - En cas d’absence de clé WS, le WS renverra typiquement `invalid_authorization_header (code 1008)`.
+
+### UI de test
+- Page: `/tts-test` (frontend)
+- Panneaux: Logs WS (client), Meta, Erreurs, Visèmes
+- Lecture: MediaSource MP3 côté navigateur en mode HTTP
+
+### Paramètres utiles
+- Voice ID par défaut: `21m00Tcm4TlvDq8ikWAM` (Rachel). Utilisez des IDs de voix (pas des noms).
+- Modèle par défaut: `eleven_multilingual_v2`
+- Format: `mp3_44100_128`
 
 ## 🔌 Utilisation WebSocket
 
@@ -445,10 +478,11 @@ DEFAULT_THINKING_BUDGET = 1000                  # Tokens
 FROM python:3.11-slim
 
 WORKDIR /app
-COPY requirements.txt .
+COPY backend/requirements.txt ./requirements.txt
 RUN pip install -r requirements.txt
 
-COPY . .
+COPY backend ./backend
+WORKDIR /app/backend
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -456,10 +490,10 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ### Production
 ```bash
-# Avec Gunicorn
+# Avec Gunicorn (depuis /backend)
 gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
 
-# Avec variables d'environnement production
+# Variables d'environnement production
 export ENVIRONMENT=production
 export DEBUG=false
 export LOG_LEVEL=WARNING
@@ -541,9 +575,12 @@ utils/                  # Utilitaires
 - [x] Documentation API
 
 ### 🔄 En Cours
-- [ ] Interface React + Vite.js
-- [ ] Capture microphone temps réel
+- [ ] Interface React + Vite.js (frontend/)
+- [ ] Capture microphone temps réel (frontend/components/audio)
 - [ ] Dashboard analytics visuel
+- [ ] HTTP TTS par défaut (WS activé quand clé Bearer est disponible)
+- [ ] Observabilité /api/v1/tts-stream (octets, durée, statut amont)
+- [ ] Améliorations pipeline IA (prompts et coûts)
 - [ ] Mobile app
 
 ### 🚀 Futur
