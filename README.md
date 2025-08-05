@@ -51,21 +51,23 @@
 ```mermaid
 graph TB
     subgraph "Client Layer"
-        A[React Frontend] 
-        B[Mobile App]
+        A[React Frontend]
         C[Audio Input]
+        U[/Page /tts-test/]
     end
     
     subgraph "API Gateway"
         D[FastAPI Server]
         E[WebSocket Handler]
         F[Authentication]
+        R[/REST API/]
     end
     
     subgraph "Core Services"
         G[Audio Service]
         H[Storage Service]
         I[Gemini AI Service]
+        V[Voice/TTS Service]
     end
     
     subgraph "Processing Pipeline"
@@ -82,48 +84,78 @@ graph TB
     end
     
     A --> D
-    B --> D
+    U --> R
     C --> E
     D --> F
+    R --> V
     E --> G
     F --> H
     G --> J
     J --> K
     K --> L
-    M --> I
     J --> M
     K --> M
     L --> M
+    M --> I
     H --> N
     G --> P
     I --> O
+    V --> R
 ```
 
-## 🔄 Pipeline de Traitement Audio
+### 🔊 Sous-système TTS (HTTP vs WebSocket)
+
+```mermaid
+flowchart LR
+    subgraph Frontend
+      UI[/Page /tts-test/]
+      MSE[MediaSource MP3]
+    end
+
+    subgraph Backend
+      REST{{POST /api/v1/tts-stream}}
+      WS((WS /ws/tts))
+      ProxyHTTP[Proxy ElevenLabs HTTP]
+      ProxyWS[Proxy ElevenLabs WS]
+    end
+
+    subgraph ElevenLabs
+      ELHTTP[[POST /v1/text-to-speech/{voice_id}/stream]]
+      ELWS[[wss://.../stream-input]]
+    end
+
+    UI -- HTTP --> REST --> ProxyHTTP --> ELHTTP
+    ELHTTP --> ProxyHTTP --> REST --> UI
+    UI -. WS .-> WS --> ProxyWS --> ELWS
+    ELWS --> ProxyWS --> WS -. BINARY/visèmes .-> UI
+    UI --> MSE
+```
+
+## 🔄 Pipeline de Traitement Audio et IA
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant WS as WebSocket
+    participant REST as REST API
     participant AP as AURA Pipeline
     participant AS as Audio Service
     participant FP as Feedback Processor
     participant AI as Gemini AI
     
     C->>WS: Audio Chunk (100ms)
-    WS->>AP: ProcessorPart
+    WS->>AP: ProcessorPart(JSON)
     AP->>AS: Audio Analysis
     AS-->>AP: Voice Metrics
-    AP->>FP: Analysis Results
-    FP->>AI: Generate Feedback
-    AI-->>FP: AI Suggestions
-    FP-->>AP: Coaching Data
+    AP->>FP: Analysis Results + Context
+    FP->>AI: Prompt structuré (langue, style, métriques)
+    AI-->>FP: Suggestions IA (FR/EN)
+    FP-->>AP: Coaching Data (realtime_suggestion, coaching_result)
     AP->>WS: Real-time Results
     WS->>C: Live Feedback
-    
-    Note over AP: Parallel Processing
-    Note over AI: French Coaching
-    Note over C: Instant UI Update
+
+    Note over AP: Throttling/parallelisme configurable
+    Note over AI: Prompts culturels FR/EN
 ```
 
 ## 🚀 Installation et Configuration
