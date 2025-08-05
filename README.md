@@ -103,39 +103,6 @@ graph TB
     V --> R
 ```
 
-### 🔊 Sous-système TTS (HTTP vs WebSocket)
-
-```mermaid
-flowchart LR
-    subgraph Frontend
-      UI[/Page \/tts-test\//]    %% Échapper le slash dans les labels Markdown sensibles
-      MSE[MediaSource MP3]
-    end
-
-    subgraph Backend
-      %% Formes compatibles GitHub Mermaid:
-      %% - Éviter {{...}} et {...} dans les labels
-      REST[POST \/api\/v1\/tts-stream]
-      WS((WS \/ws\/tts))
-      ProxyHTTP[Proxy ElevenLabs HTTP]
-      ProxyWS[Proxy ElevenLabs WS]
-    end
-
-    subgraph ElevenLabs
-      %% Éviter les accolades, qui déclenchent DIAMOND_START
-      %% Deux options valides: échapper \{ \} ou remplacer par ( )
-      %% On garde ici l'échappement pour davantage de clarté:
-      ELHTTP[[POST \/v1\/text-to-speech\/\{voice_id\}\/stream]]
-      ELWS[[wss:\/\/...\/stream-input]]
-    end
-
-    UI -- HTTP --> REST --> ProxyHTTP --> ELHTTP
-    ELHTTP --> ProxyHTTP --> REST --> UI
-    UI -. WS .-> WS --> ProxyWS --> ELWS
-    ELWS --> ProxyWS --> WS -. BINARY\/visèmes .-> UI
-    UI --> MSE
-```
-
 ## 🔄 Pipeline de Traitement Audio et IA
 
 ```mermaid
