@@ -188,6 +188,131 @@ def create_router(services: Dict[str, Any]) -> APIRouter:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"TTS synthesis failed: {str(e)}"
             )
+    @router.post("/tts-stream")
+    async def tts_stream_fallback(
+        payload: Dict[str, Any] = Body(..., description="HTTP streaming fallback for ElevenLabs: { text|ssml, voiceId?, model?, format? }")
+    ):
+        """
+        Proxy HTTP chunked streaming vers ElevenLabs /v1/text-to-speech/{voice_id}/stream.
+        
+        Entrée:
+          - text ou ssml (un des deux requis)
+          - voiceId (optionnel)
+          - model (optionnel, défaut: eleven_multilingual_v2)
+          - format (optionnel, défaut: mp3_44100_128)
+        
+        Sortie:
+          - StreamingResponse audio/mpeg; en cas d'erreur amont, des blocs JSON peuvent apparaître;
+            le client doit détecter et traiter ces blocs non-audio.
+        """
+        try:
+            from app.config import get_settings
+            settings = get_settings()
+            api_key = os.getenv("ELEVENLABS_API_KEY") or getattr(settings, "elevenlabs_api_key", None)
+            if not api_key:
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="ELEVENLABS_API_KEY manquant")
+
+            text = payload.get("text")
+            ssml = payload.get("ssml")
+            if not text and not ssml:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Fournir 'text' ou 'ssml'")
+
+            # Voice selection precedence:
+            # 1) explicit payload.voiceId
+            # 2) settings.elevenlabs_default_voice_id (env ELEVENLABS_DEFAULT_VOICE_ID)
+            # 3) hard default to a known valid premade: Rachel (21m00Tcm4TlvDq8ikWAM)
+            configured_voice = getattr(settings, "elevenlabs_default_voice_id", None)
+            hard_default_voice = "21m00Tcm4TlvDq8ikWAM"  # Rachel
+            req_voice = payload.get("voiceId")
+            # Normaliser d'éventuels alias textuels non-ID
+            if isinstance(req_voice, str):
+                alias = req_voice.strip().lower()
+                if alias == "rachel":
+                    req_voice = hard_default_voice
+                elif alias == "daniel":
+                    # "Daniel" n'est pas un ID public standard; éviter 404 voice_not_found
+                    req_voice = None
+            voice_id = req_voice or configured_voice or hard_default_voice
+            model = payload.get("model") or getattr(settings, "elevenlabs_model", "eleven_multilingual_v2")
+            output_format = payload.get("format") or "mp3_44100_128"
+
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+
+            # Préparer le body upstream (texte ou ssml)
+            upstream_body: Dict[str, Any] = {
+                "model_id": model,
+                "output_format": output_format,
+                "optimize_streaming_latency": 3,
+                "voice_settings": {"stability": 0.5, "similarity_boost": 0.5}
+            }
+            if ssml:
+                upstream_body["ssml"] = ssml
+            else:
+                upstream_body["text"] = text
+
+            async def stream_generator():
+                bytes_forwarded = 0
+                try:
+                    timeout = aiohttp.ClientTimeout(total=60)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(
+                            url,
+                            headers={
+                                # IMPORTANT: HTTP ElevenLabs REST/stream uses 'xi-api-key', not Bearer
+                                "xi-api-key": api_key,
+                                "Content-Type": "application/json",
+                                "Accept": "audio/mpeg"
+                            },
+                            json=upstream_body
+                        ) as resp:
+                            status_code = resp.status
+                            if status_code >= 400:
+                                # Essayer de lire le JSON d'erreur
+                                try:
+                                    err = await resp.json()
+                                except Exception:
+                                    err_text = await resp.text()
+                                    err = {"error": err_text}
+                                err_payload = json.dumps({
+                                    "error": True,
+                                    "upstream_status": status_code,
+                                    "details": err
+                                }).encode("utf-8")
+                                yield err_payload
+                                return
+                            async for chunk in resp.content.iter_chunked(4096):
+                                if not chunk:
+                                    continue
+                                bytes_forwarded += len(chunk)
+                                yield chunk
+                except aiohttp.ClientResponseError as e:
+                    # Normalize upstream 404 voice_not_found and other HTTP errors
+                    err_payload = json.dumps({
+                        "error": True,
+                        "code": "UPSTREAM_HTTP_ERROR",
+                        "upstream_status": getattr(e, "status", None),
+                        "message": str(e),
+                        "bytes_forwarded": bytes_forwarded
+                    }).encode("utf-8")
+                    yield err_payload
+                except Exception as e:
+                    err_payload = json.dumps({
+                        "error": True,
+                        "code": "STREAM_EXCEPTION",
+                        "message": str(e),
+                        "bytes_forwarded": bytes_forwarded
+                    }).encode("utf-8")
+                    yield err_payload
+
+            from fastapi.responses import StreamingResponse
+            return StreamingResponse(stream_generator(), media_type="audio/mpeg")
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"/tts-stream proxy failed: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    
     @router.get("/debug/tts-auth")
     async def debug_tts_auth():
         """

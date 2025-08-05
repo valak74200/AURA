@@ -34,6 +34,7 @@ from genai_processors import streams
 import websockets
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 # Use aiohttp for WS with Authorization headers support
+import aiohttp
 from aiohttp import ClientSession, WSMsgType, WSServerHandshakeError
 
 logger = get_logger(__name__)
@@ -79,8 +80,13 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
         """
         await websocket.accept()
         # State
+        # Ensure default voice_id is a valid ElevenLabs voice ID (avoid display names like "Rachel")
+        default_voice_env = os.getenv("ELEVENLABS_DEFAULT_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+        default_voice_cfg = services.get("settings").elevenlabs_default_voice_id if "settings" in services else default_voice_env
+        if not isinstance(default_voice_cfg, str) or not default_voice_cfg.strip() or default_voice_cfg.strip().lower() == "rachel":
+            default_voice_cfg = "21m00Tcm4TlvDq8ikWAM"
         session = {
-            "voice_id": services.get("settings").elevenlabs_default_voice_id if "settings" in services else os.getenv("ELEVENLABS_DEFAULT_VOICE_ID", "Rachel"),
+            "voice_id": default_voice_cfg,
             "model": services.get("settings").elevenlabs_model if "settings" in services else os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"),
             "format": "mp3_44100_128",
             "sample_rate": 44100,
@@ -89,6 +95,21 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
             "elevenlabs_task": None,
             "cancel_flag": False
         }
+        # Send initial diag meta
+        await websocket.send_json({
+            "type": "tts.meta",
+            "data": {
+                "stage": "accepted",
+                "defaults": {
+                    "voiceId": session["voice_id"],
+                    "model": session["model"],
+                    "format": session["format"],
+                    "sampleRate": session["sample_rate"],
+                    "lang": session["lang"]
+                }
+            }
+        })
+        logger.info("/ws/tts accepted client connection", extra={"defaults": {k: session[k] for k in ("voice_id","model","format","sample_rate","lang")}})
 
         # Heartbeat task: ping every 20s
         async def heartbeat_loop():
@@ -162,106 +183,281 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
             """
             Open a streaming connection to ElevenLabs and forward data to client.
             """
-            api_key = os.getenv("ELEVENLABS_API_KEY") or getattr(services.get("settings", None), "elevenlabs_api_key", None)
-            if not api_key:
-                await websocket.send_json({"type": "tts.error", "code": "NO_API_KEY", "message": "Missing ELEVENLABS_API_KEY"})
+            # Prefer settings service first to avoid env desync in process managers
+            settings_api_key = None
+            try:
+                settings_api_key = getattr(services.get("settings", None), "elevenlabs_api_key", None)
+            except Exception:
+                settings_api_key = None
+            env_api_key = os.getenv("ELEVENLABS_API_KEY")
+            api_key = settings_api_key or env_api_key
+            if not api_key or not isinstance(api_key, str) or not api_key.strip():
+                await websocket.send_json({
+                    "type": "tts.error",
+                    "code": "NO_API_KEY",
+                    "message": "Missing ELEVENLABS_API_KEY",
+                    "diag": {"source": "settings_or_env", "settings_present": bool(settings_api_key), "env_present": bool(env_api_key)}
+                })
+                logger.error("/ws/tts NO_API_KEY: ELEVENLABS_API_KEY missing/empty", extra={"settings_present": bool(settings_api_key), "env_present": bool(env_api_key)})
                 return
+            # Normalize api_key (avoid stray spaces/newlines and common prefix mistakes)
+            original_api_key = api_key
+            api_key = api_key.strip()
+            # Some platforms accidentally include 'Bearer ' in the env var; strip it if present
+            if api_key.lower().startswith("bearer "):
+                api_key = api_key[7:].strip()
+            # Remove surrounding quotes/newlines if any
+            api_key = api_key.strip(' "\'\n\r\t')
+            # ElevenLabs public keys often start with "eleven_"; record only the prefix class and length
+            looks_like_key = api_key.lower().startswith("eleven")
+            masked = f"***len={len(api_key)};prefix={'eleven' if looks_like_key else 'other'}" if api_key else "***none"
+            await websocket.send_json({"type": "tts.meta", "data": {"stage": "auth_prepared", "api_key_masked": masked}})
+            logger.debug("/ws/tts prepared Authorization header for upstream")
 
             voice_id = session["voice_id"]
             model = session["model"]
             output_format = session["format"]
+            # Ensure defaults are valid for ElevenLabs WS
+            if not model:
+                model = "eleven_multilingual_v2"
+                session["model"] = model
+            if not output_format or not isinstance(output_format, str):
+                output_format = "mp3_44100_128"
+                session["format"] = output_format
+            # Force robust defaults to avoid silent incompatibilities
+            model = "eleven_multilingual_v2"
+            output_format = "mp3_44100_128"
+            session["model"] = model
+            session["format"] = output_format
+            # Force explicit values to avoid silent incompatibilities
+            model = "eleven_multilingual_v2"
+            output_format = "mp3_44100_128"
+            session["model"] = model
+            session["format"] = output_format
+            # Ensure model/output_format compatibility; fallback if empty
+            if not model:
+                model = "eleven_multilingual_v2"
+                session["model"] = model
+            if not output_format or not isinstance(output_format, str):
+                output_format = "mp3_44100_128"
+                session["format"] = output_format
+            # Normalize output_format if client sends mp3_44100_128; ElevenLabs expects "mp3_44100_128" or in some SDKs "mp3_44100"
+            # Keep as-is but log for clarity
+            if not isinstance(output_format, str):
+                output_format = "mp3_44100_128"
+                session["format"] = output_format
+                logger.debug("/ws/tts normalized output_format to default mp3_44100_128")
 
             # ElevenLabs realtime TTS WS endpoint (stream-input, voice_id in path)
             # Auth via Authorization: Bearer <API_KEY> in handshake headers
             url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input"
+            # Mask API key length only, never log the value
+            masked = f"***len={len(api_key)}" if api_key else "***none"
+            logger.info(
+                "/ws/tts opening ElevenLabs stream",
+                extra={"voice_id": voice_id, "model": model, "format": output_format, "auth_header": "Bearer <redacted>", "api_key": masked}
+            )
+            await websocket.send_json({"type": "tts.meta", "data": {"stage": "connect_upstream", "endpoint": url}})
+            # Extra defensive: ensure we never pass an empty Authorization header
+            if not api_key:
+                await websocket.send_json({
+                    "type": "tts.error",
+                    "code": "UNAUTHORIZED",
+                    "message": "Empty API key after normalization; check ELEVENLABS_API_KEY"
+                })
+                logger.error("/ws/tts empty API key after normalization")
+                return
 
             try:
                 # Use aiohttp to pass Authorization header during WS handshake
-                aiohttp_session = ClientSession()
+                timeout = aiohttp.ClientTimeout(total=30)
+                aiohttp_session = ClientSession(timeout=timeout)
                 # Keep reference to close later with the WS
                 session["_aiohttp_session"] = aiohttp_session
+                # Build headers exactly as ElevenLabs expects
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/json"  # TEXT control frames are JSON
+                }
+                # Extra diagnostics before connect (without leaking key)
+                logger.debug("/ws/tts connecting to ElevenLabs", extra={"url": url, "headers_present": list(headers.keys()), "auth_header_value_preview": "Bearer <redacted>"})
                 el_ws = await aiohttp_session.ws_connect(
                     url,
-                    headers={"Authorization": f"Bearer {api_key}"},
+                    headers=headers,
                     autoclose=False,
                     autoping=True,
                     max_msg_size=2 * 1024 * 1024
                 )
                 session["elevenlabs_ws"] = el_ws
+                logger.info("/ws/tts ElevenLabs handshake OK")
+                await websocket.send_json({"type": "tts.meta", "data": {"stage": "upstream_connected"}})
             except WSServerHandshakeError as e:
-                # Surface HTTP status for diagnostics (401/403)
+                status = getattr(e, 'status', None)
+                diag = {
+                    "status": status,
+                    "reason": str(e),
+                }
+                # When handshake fails (401/403), surface a stronger auth hint
                 await websocket.send_json({
                     "type": "tts.error",
                     "code": "CONNECT_FAILED",
-                    "status": getattr(e, 'status', None),
-                    "message": f"Handshake failed: {str(e)}"
+                    "status": status,
+                    "message": f"Handshake failed: {str(e)}",
+                    "diagnostic": {**diag, "hint": "Check ELEVENLABS_API_KEY value and ensure Authorization: Bearer <key> is accepted by ElevenLabs"}
                 })
+                logger.error("/ws/tts ElevenLabs handshake failed", extra=diag)
                 return
             except Exception as e:
-                await websocket.send_json({"type": "tts.error", "code": "CONNECT_FAILED", "message": str(e)})
+                await websocket.send_json({"type": "tts.error", "code": "CONNECT_FAILED", "message": str(e), "diag": {"stage": "connect", "error": str(e)}})
+                logger.error("/ws/tts ElevenLabs connect error", extra={"error": str(e)})
                 return
 
             async def pump_from_elevenlabs():
+                bytes_forwarded = 0
+                text_len = len(text) if text else 0
+                ssml_len = len(ssml) if ssml else 0
                 try:
                     # For stream-input, after handshake with Authorization header,
                     # send a "start" message containing synthesis params and content.
+                    # ElevenLabs Realtime WS requires:
+                    # 1) start
+                    # 2) multiple input_audio_buffer.append (optional if sending captured audio)
+                    # 3) input_audio_buffer.commit
+                    # 4) generate
+                    #
+                    # For plain TTS-from-text/ssml on stream-input, they still expect a "generate" signal
+                    # after start. Some accounts/models also require an explicit "text" message type.
+                    #
+                    # Send start
                     start_payload = {
                         "type": "start",
-                        "model_id": model,
-                        "output_format": output_format,
+                        "model_id": "eleven_multilingual_v2",
+                        "output_format": "mp3_44100_128",
                         "optimize_streaming_latency": 3,
                         "voice_settings": {"stability": 0.5, "similarity_boost": 0.5}
                     }
+                    # Some ElevenLabs accounts/models require voice_id AND 'generation_config'
+                    # Include explicit voice_id and a minimal generation_config to avoid 1008 errors.
+                    if session.get("voice_id"):
+                        start_payload["voice_id"] = session["voice_id"]
+                    start_payload["generation_config"] = {
+                        "chunk_length_schedule": [120, 160, 200]
+                    }
+                    # Also include text/ssml inline in start for maximum compatibility
+                    if text:
+                        start_payload["text"] = text
                     if ssml:
                         start_payload["ssml"] = ssml
-                    elif text:
-                        start_payload["text"] = text
+                    logger.info("/ws/tts sending start to ElevenLabs", extra={"has_text": bool(text), "text_len": text_len, "has_ssml": bool(ssml), "ssml_len": ssml_len})
                     await el_ws.send_json(start_payload)
 
+                    # Per ElevenLabs stream-input docs:
+                    # 1) start
+                    # 2) add_text (text or ssml)
+                    # 3) input_audio_buffer.commit
+                    # 4) generate
+                    # Log we are following the multi-stream-input sequence
+                    await websocket.send_json({"type": "tts.meta", "data": {"sequence": "start->add_text->commit->generate"}})
+                    if ssml:
+                        await el_ws.send_json({"type": "add_text", "ssml": ssml})
+                        logger.debug("/ws/tts sent add_text (ssml)", extra={"ssml_len": ssml_len})
+                        await websocket.send_json({"type": "tts.meta", "data": {"stage": "add_text_sent", "mode": "ssml", "len": ssml_len}})
+                    elif text:
+                        await el_ws.send_json({"type": "add_text", "text": text})
+                        logger.debug("/ws/tts sent add_text (text)", extra={"text_len": text_len})
+                        await websocket.send_json({"type": "tts.meta", "data": {"stage": "add_text_sent", "mode": "text", "len": text_len}})
+                    else:
+                        # Even if inline start included content, still require an explicit add_text for some accounts
+                        await websocket.send_json({"type": "tts.error", "code": "NO_CONTENT", "message": "No text/ssml provided", "diag": {"stage": "add_text"}})
+                        return
+
+                    await el_ws.send_json({"type": "input_audio_buffer.commit"})
+                    logger.debug("/ws/tts sent input_audio_buffer.commit")
+                    await websocket.send_json({"type": "tts.meta", "data": {"stage": "commit_sent"}})
+
+                    await el_ws.send_json({"type": "generate"})
+                    logger.debug("/ws/tts sent generate to ElevenLabs")
+                    await websocket.send_json({"type": "tts.meta", "data": {"stage": "generate_sent"}})
+
                     # Read frames from ElevenLabs (aiohttp WS API)
+                    # Send a tiny client ping after generate to keep the connection lively
+                    try:
+                        await el_ws.ping()
+                    except Exception:
+                        pass
                     while True:
                         msg = await el_ws.receive()
                         if msg.type == WSMsgType.BINARY:
+                            chunk_size = len(msg.data) if msg.data else 0
+                            bytes_forwarded += chunk_size
+                            logger.debug("/ws/tts forwarding binary audio", extra={"chunk_bytes": chunk_size, "total_bytes": bytes_forwarded})
                             if websocket.client_state == WebSocketState.CONNECTED:
                                 await websocket.send_bytes(msg.data)
                             else:
+                                logger.info("/ws/tts client disconnected while forwarding audio")
                                 break
                         elif msg.type == WSMsgType.TEXT:
+                            # Log a compact line and forward normalized info
+                            raw = msg.data
                             try:
-                                data = json.loads(msg.data)
+                                data = json.loads(raw)
                             except Exception:
-                                await websocket.send_json({"type": "tts.debug", "raw": str(msg.data)})
+                                logger.debug("/ws/tts received non-JSON TEXT from ElevenLabs", extra={"len": len(raw)})
+                                await websocket.send_json({"type": "tts.meta", "data": {"raw": str(raw)[:500]}})
                                 continue
-                            event_type = data.get("type") or data.get("event") or ""
-                            if "viseme" in event_type.lower() or "phoneme" in event_type.lower() or "timestamp" in data:
+                            event_type = (data.get("type") or data.get("event") or "").lower()
+                            # Forward the upstream TEXT exactly for better diagnostics as meta mirror
+                            await websocket.send_json({"type": "tts.meta", "data": {"upstream_text": data}})
+                            logger.debug("/ws/tts TEXT event from ElevenLabs", extra={"event_type": event_type})
+                            if "viseme" in event_type or "phoneme" in event_type or "timestamp" in data:
                                 time_ms = int(float(data.get("offset", data.get("timestamp", 0))) * 1000) if isinstance(data.get("timestamp"), float) else data.get("time_ms", 0)
                                 phoneme = data.get("phoneme") or data.get("viseme") or data.get("morph") or ""
                                 weight = float(data.get("weight", 1.0))
                                 morph = await morph_map(phoneme)
                                 await websocket.send_json({"type": "tts.viseme","time_ms": time_ms,"morph": morph,"weight": weight})
-                            elif data.get("isFinal") or data.get("final"):
+                            elif data.get("isFinal") or data.get("final") or event_type in ("done", "completed", "generation.completed"):
                                 await websocket.send_json({"type": "tts.end"})
+                                logger.info("/ws/tts ElevenLabs final event received, ending stream", extra={"total_bytes": bytes_forwarded})
+                                break
                             else:
                                 await websocket.send_json({"type": "tts.meta", "data": data})
-                                # Diagnostics: explicit unauthorized
+                                # Diagnostics: explicit unauthorized / parameter issues
                                 try:
                                     code = int(data.get("code", 0))
                                 except Exception:
                                     code = 0
-                                if code in (401, 403) or "unauthorized" in str(data).lower():
-                                    await websocket.send_json({"type": "tts.error", "code": "UNAUTHORIZED", "message": "ElevenLabs authentication failed (401/403). Check ELEVENLABS_API_KEY and account access."})
+                                msg_lower = str(data).lower()
+                                if code in (401, 403, 1008) or "unauthorized" in msg_lower or "invalid_authorization_header" in msg_lower:
+                                    await websocket.send_json({
+                                        "type": "tts.error",
+                                        "code": "UNAUTHORIZED",
+                                        "message": "ElevenLabs authentication failed (invalid/401/403). Verify ELEVENLABS_API_KEY and that WS uses Authorization: Bearer <key>."
+                                    })
+                                    # Emit immediate end to let client release MSE gracefully
+                                    try:
+                                        await websocket.send_json({"type": "tts.end"})
+                                    except Exception:
+                                        pass
+                                    logger.error("/ws/tts UNAUTHORIZED from ElevenLabs", extra={"code": code, "details": data})
                                     break
+                                # Extra diagnostics for common param issues (not auth):
+                                if "voice_not_found" in msg_lower or "model" in msg_lower and "not" in msg_lower:
+                                    await websocket.send_json({"type": "tts.meta", "data": {"warning": "Parameter issue reported by upstream", "details": data}})
                         elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED):
+                            logger.info("/ws/tts ElevenLabs WS closed", extra={"total_bytes": bytes_forwarded})
                             break
                         elif msg.type == WSMsgType.ERROR:
-                            await websocket.send_json({"type": "tts.error", "code": "STREAM_ERROR", "message": str(el_ws.exception())})
+                            err = str(el_ws.exception())
+                            await websocket.send_json({"type": "tts.error", "code": "STREAM_ERROR", "message": err, "diag": {"stage": "upstream_receive_error"}})
+                            logger.error("/ws/tts ElevenLabs WS error", extra={"error": err})
                             break
 
                 except asyncio.CancelledError:
-                    pass
+                    logger.debug("/ws/tts pump task cancelled")
                 except Exception as e:
                     if websocket.client_state == WebSocketState.CONNECTED:
-                        await websocket.send_json({"type": "tts.error", "code": "STREAM_ERROR", "message": str(e)})
+                        await websocket.send_json({"type": "tts.error", "code": "STREAM_ERROR", "message": str(e), "diag": {"stage": "pump_exception"}})
+                    logger.error("/ws/tts pump exception", extra={"error": str(e)})
                 finally:
                     # Ensure WS is closed; ignore CancelledError from underlying reader during shutdown
                     try:
@@ -277,6 +473,7 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
                             await s.close()
                     except Exception:
                         pass
+                    logger.info("/ws/tts pump finished", extra={"bytes_forwarded": bytes_forwarded})
 
             session["elevenlabs_task"] = asyncio.create_task(pump_from_elevenlabs())
 
@@ -292,15 +489,26 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
                     "lang": session["lang"]
                 }
             })
+            await websocket.send_json({"type": "tts.meta", "data": {"stage": "ready_acked"}})
 
             while True:
                 # Allow both text and binary? Control plane is JSON here.
                 raw = await websocket.receive_text()
+                logger.debug("/ws/tts received from client", extra={"payload": raw[:500]})
                 msg = json.loads(raw)
                 mtype = msg.get("type")
 
                 if mtype == "tts.start":
-                    session["voice_id"] = msg.get("voiceId", session["voice_id"])
+                    # Normalize incoming voiceId: support aliases while enforcing valid ElevenLabs voice IDs
+                    vid = msg.get("voiceId", session["voice_id"])
+                    if isinstance(vid, str):
+                        name = vid.strip().lower()
+                        if name == "rachel":
+                            vid = "21m00Tcm4TlvDq8ikWAM"
+                        elif name == "daniel":
+                            # Neutralize unsupported alias by falling back to current/default
+                            vid = session["voice_id"]
+                    session["voice_id"] = vid
                     session["model"] = msg.get("model", session["model"])
                     session["format"] = msg.get("format", session["format"])
                     session["sample_rate"] = int(msg.get("sampleRate", session["sample_rate"]))
@@ -313,28 +521,35 @@ def create_websocket_router(services: Dict[str, Any]) -> APIRouter:
                         "sampleRate": session["sample_rate"],
                         "lang": session["lang"]
                     })
+                    logger.info("/ws/tts acked tts.start", extra={"voice_id": session["voice_id"], "model": session["model"], "format": session["format"]})
 
                 elif mtype in ("tts.text", "tts.ssml"):
                     text = msg.get("text") if mtype == "tts.text" else None
                     ssml = msg.get("ssml") if mtype == "tts.ssml" else None
+                    logger.info("/ws/tts received synthesis request", extra={"type": mtype, "text_len": len(text) if text else 0, "has_ssml": bool(ssml)})
 
                     # If another stream is active, close it first
                     await close_elevenlabs()
+                    # Extra: advise client to fallback to HTTP if UNAUTHORIZED is frequent
                     session["cancel_flag"] = False
+                    await websocket.send_json({"type": "tts.meta", "data": {"stage": "open_upstream_begin"}})
                     await open_elevenlabs_stream(text=text, ssml=ssml)
 
                 elif mtype == "tts.cancel":
                     session["cancel_flag"] = True
                     await close_elevenlabs()
                     await websocket.send_json({"type": "tts.canceled"})
+                    logger.info("/ws/tts canceled by client")
 
                 elif mtype == "tts.end":
                     await close_elevenlabs()
                     await websocket.send_json({"type": "tts.end"})
+                    logger.info("/ws/tts ended by client")
                     break
 
                 else:
                     await websocket.send_json({"type": "tts.error", "code": "UNKNOWN_TYPE", "message": f"Unknown message type: {mtype}"})
+                    logger.warning("/ws/tts received unknown message type", extra={"type": mtype})
 
         except WebSocketDisconnect:
             logger.info("/ws/tts client disconnected")
