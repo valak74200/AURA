@@ -113,15 +113,18 @@ flowchart LR
     end
 
     subgraph Backend
-      REST{{POST /api/v1/tts-stream}}
+      %% Utiliser des formes compatibles GitHub Mermaid:
+      %% - Losange de décision: {...} peut provoquer des erreurs → utiliser ((...)) ou [text]
+      %% - Sous-routine {{...}} n'est pas toujours supportée → utiliser [...]
+      REST[POST /api/v1/tts-stream]
       WS((WS /ws/tts))
       ProxyHTTP[Proxy ElevenLabs HTTP]
       ProxyWS[Proxy ElevenLabs WS]
     end
 
     subgraph ElevenLabs
-      %% Note: les accolades doivent être échappées dans Mermaid pour éviter les erreurs de parsing
-      ELHTTP[[POST /v1/text-to-speech/\{voice_id\}/stream]]
+      %% Remplacer les accolades par parenthèses pour éviter DIAMOND_START
+      ELHTTP[[POST /v1/text-to-speech/(voice_id)/stream]]
       ELWS[[wss://.../stream-input]]
     end
 
