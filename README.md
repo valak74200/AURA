@@ -120,7 +120,8 @@ flowchart LR
     end
 
     subgraph ElevenLabs
-      ELHTTP[[POST /v1/text-to-speech/{voice_id}/stream]]
+      %% Note: les accolades doivent être échappées dans Mermaid pour éviter les erreurs de parsing
+      ELHTTP[[POST /v1/text-to-speech/\{voice_id\}/stream]]
       ELWS[[wss://.../stream-input]]
     end
 
