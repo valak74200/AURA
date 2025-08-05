@@ -108,30 +108,31 @@ graph TB
 ```mermaid
 flowchart LR
     subgraph Frontend
-      UI[/Page /tts-test/]
+      UI[/Page \/tts-test\//]    %% Échapper le slash dans les labels Markdown sensibles
       MSE[MediaSource MP3]
     end
 
     subgraph Backend
-      %% Utiliser des formes compatibles GitHub Mermaid:
-      %% - Losange de décision: {...} peut provoquer des erreurs → utiliser ((...)) ou [text]
-      %% - Sous-routine {{...}} n'est pas toujours supportée → utiliser [...]
-      REST[POST /api/v1/tts-stream]
-      WS((WS /ws/tts))
+      %% Formes compatibles GitHub Mermaid:
+      %% - Éviter {{...}} et {...} dans les labels
+      REST[POST \/api\/v1\/tts-stream]
+      WS((WS \/ws\/tts))
       ProxyHTTP[Proxy ElevenLabs HTTP]
       ProxyWS[Proxy ElevenLabs WS]
     end
 
     subgraph ElevenLabs
-      %% Remplacer les accolades par parenthèses pour éviter DIAMOND_START
-      ELHTTP[[POST /v1/text-to-speech/(voice_id)/stream]]
-      ELWS[[wss://.../stream-input]]
+      %% Éviter les accolades, qui déclenchent DIAMOND_START
+      %% Deux options valides: échapper \{ \} ou remplacer par ( )
+      %% On garde ici l'échappement pour davantage de clarté:
+      ELHTTP[[POST \/v1\/text-to-speech\/\{voice_id\}\/stream]]
+      ELWS[[wss:\/\/...\/stream-input]]
     end
 
     UI -- HTTP --> REST --> ProxyHTTP --> ELHTTP
     ELHTTP --> ProxyHTTP --> REST --> UI
     UI -. WS .-> WS --> ProxyWS --> ELWS
-    ELWS --> ProxyWS --> WS -. BINARY/visèmes .-> UI
+    ELWS --> ProxyWS --> WS -. BINARY\/visèmes .-> UI
     UI --> MSE
 ```
 
